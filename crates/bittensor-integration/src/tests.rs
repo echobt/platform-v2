@@ -40,7 +40,7 @@ mod tests {
     fn test_submitter_creation() {
         let config = BittensorConfig::local(1);
         let client = SubtensorClient::new(config);
-        let submitter = WeightSubmitter::new(client);
+        let submitter = WeightSubmitter::new(client, None);
         assert!(!submitter.has_pending_commit());
     }
 

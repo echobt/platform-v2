@@ -2,6 +2,11 @@
 //!
 //! This module handles submitting weights to the Bittensor network using the
 //! commit-reveal pattern that matches subtensor's exact format.
+//!
+//! ## Persistence
+//! Commits are persisted to disk to survive restarts. This ensures that if
+//! the validator restarts between commit and reveal, it can still reveal
+//! the previously committed weights.
 
 use crate::SubtensorClient;
 use anyhow::Result;
@@ -15,52 +20,176 @@ use bittensor_rs::{
     set_mechanism_weights,
 };
 use platform_challenge_sdk::WeightAssignment;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
-/// Weight submission manager
+/// Default path for commit persistence
+const DEFAULT_COMMITS_FILE: &str = "pending_commits.json";
+
+/// Persisted state for weight commits
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PersistedCommitState {
+    /// Epoch when commits were made
+    pub committed_epoch: Option<u64>,
+    /// Pending mechanism commits (mechanism_id -> commit data)
+    pub pending_mechanism_commits: HashMap<u8, PendingMechanismCommit>,
+    /// Standard pending commit (non-mechanism)
+    pub pending_commit: Option<PendingCommitV2>,
+    /// Last revealed epoch per mechanism
+    pub last_revealed_epoch: HashMap<u8, u64>,
+}
+
+impl PersistedCommitState {
+    /// Load from file, returning default if file doesn't exist
+    pub fn load(path: &PathBuf) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(state) => {
+                    info!("Loaded persisted commit state from {:?}", path);
+                    state
+                }
+                Err(e) => {
+                    warn!("Failed to parse commit state file: {}", e);
+                    Self::default()
+                }
+            },
+            Err(_) => {
+                debug!("No existing commit state file at {:?}", path);
+                Self::default()
+            }
+        }
+    }
+
+    /// Save to file
+    pub fn save(&self, path: &PathBuf) -> Result<()> {
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        debug!("Saved commit state to {:?}", path);
+        Ok(())
+    }
+
+    /// Check if we have commits for a specific epoch
+    pub fn has_commits_for_epoch(&self, epoch: u64) -> bool {
+        self.committed_epoch == Some(epoch) && !self.pending_mechanism_commits.is_empty()
+    }
+
+    /// Check if we already revealed for this epoch
+    pub fn has_revealed_for_epoch(&self, mechanism_id: u8, epoch: u64) -> bool {
+        self.last_revealed_epoch
+            .get(&mechanism_id)
+            .map(|e| *e >= epoch)
+            .unwrap_or(false)
+    }
+
+    /// Clear old state for new epoch
+    pub fn new_epoch(&mut self, epoch: u64) {
+        // Keep pending commits if they haven't been revealed yet
+        // Clear the committed_epoch to allow new commits
+        if self.committed_epoch != Some(epoch) {
+            // New epoch - clear old unrevealed commits (they're now invalid)
+            if !self.pending_mechanism_commits.is_empty() {
+                warn!(
+                    "Clearing {} unrevealed commits from previous epoch",
+                    self.pending_mechanism_commits.len()
+                );
+                self.pending_mechanism_commits.clear();
+            }
+            self.pending_commit = None;
+        }
+    }
+}
+
+/// Weight submission manager with persistence
 pub struct WeightSubmitter {
     client: SubtensorClient,
-    /// Current commit hash (if using commit-reveal) - now uses v2 format
-    pending_commit: Option<PendingCommitV2>,
-    /// Pending mechanism commits for batch commit-reveal
-    pending_mechanism_commits: HashMap<u8, PendingMechanismCommit>,
+    /// Persisted commit state
+    state: PersistedCommitState,
+    /// Path to persistence file
+    persist_path: PathBuf,
+    /// Current epoch (updated externally)
+    current_epoch: u64,
 }
 
 /// Pending mechanism commit data
-#[derive(Clone, Debug)]
-struct PendingMechanismCommit {
-    mechanism_id: u8,
-    hash: String,
-    uids: Vec<u16>,
-    weights: Vec<u16>,
-    salt: Vec<u16>,
-    version_key: u64,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingMechanismCommit {
+    pub mechanism_id: u8,
+    pub hash: String,
+    pub uids: Vec<u16>,
+    pub weights: Vec<u16>,
+    pub salt: Vec<u16>,
+    pub version_key: u64,
+    pub epoch: u64,
 }
 
 /// Pending commit data using subtensor-compatible format (v2)
-#[derive(Clone, Debug)]
-struct PendingCommitV2 {
-    hash: String,
-    uids: Vec<u16>, // u16 to match subtensor
-    weights: Vec<u16>,
-    salt: Vec<u16>, // u16 salt as required by subtensor
-    version_key: u64,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingCommitV2 {
+    pub hash: String,
+    pub uids: Vec<u16>,
+    pub weights: Vec<u16>,
+    pub salt: Vec<u16>,
+    pub version_key: u64,
+    pub epoch: u64,
 }
 
 impl WeightSubmitter {
-    /// Create a new weight submitter
-    pub fn new(client: SubtensorClient) -> Self {
+    /// Create a new weight submitter with persistence
+    pub fn new(client: SubtensorClient, data_dir: Option<PathBuf>) -> Self {
+        let persist_path = data_dir
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(DEFAULT_COMMITS_FILE);
+
+        let state = PersistedCommitState::load(&persist_path);
+
+        if state.pending_mechanism_commits.len() > 0 {
+            info!(
+                "Loaded {} pending commits from previous session (epoch {:?})",
+                state.pending_mechanism_commits.len(),
+                state.committed_epoch
+            );
+        }
+
         Self {
             client,
-            pending_commit: None,
-            pending_mechanism_commits: HashMap::new(),
+            state,
+            persist_path,
+            current_epoch: 0,
         }
     }
 
     /// Get mutable access to the client
     pub fn client_mut(&mut self) -> &mut SubtensorClient {
         &mut self.client
+    }
+
+    /// Update current epoch and handle epoch transition
+    pub fn set_epoch(&mut self, epoch: u64) {
+        if epoch != self.current_epoch {
+            info!(
+                "Weight submitter epoch update: {} -> {}",
+                self.current_epoch, epoch
+            );
+            self.current_epoch = epoch;
+            self.state.new_epoch(epoch);
+            if let Err(e) = self.state.save(&self.persist_path) {
+                error!("Failed to save commit state: {}", e);
+            }
+        }
+    }
+
+    /// Check if we already committed for current epoch
+    pub fn has_committed_for_epoch(&self, epoch: u64) -> bool {
+        self.state.has_commits_for_epoch(epoch)
+    }
+
+    /// Save state to disk
+    fn persist(&self) {
+        if let Err(e) = self.state.save(&self.persist_path) {
+            error!("Failed to persist commit state: {}", e);
+        }
     }
 
     /// Submit weights to Bittensor
@@ -110,7 +239,8 @@ impl WeightSubmitter {
     /// Submit with commit-reveal pattern (v2 - subtensor compatible)
     async fn submit_with_commit_reveal(&mut self, weights: &[WeightAssignment]) -> Result<String> {
         // If we have a pending commit, reveal it
-        if let Some(pending) = self.pending_commit.take() {
+        if let Some(pending) = self.state.pending_commit.take() {
+            self.persist();
             return self.reveal_pending_v2(pending).await;
         }
 
@@ -150,13 +280,15 @@ impl WeightSubmitter {
         .await?;
 
         // Store pending commit for reveal
-        self.pending_commit = Some(PendingCommitV2 {
+        self.state.pending_commit = Some(PendingCommitV2 {
             hash: commit_data.commit_hash,
             uids: commit_data.uids,
             weights: commit_data.weights,
             salt: commit_data.salt,
             version_key: commit_data.version_key,
+            epoch: self.current_epoch,
         });
+        self.persist();
 
         info!("Weights committed: {}", tx_hash);
         Ok(tx_hash)
@@ -188,7 +320,7 @@ impl WeightSubmitter {
 
     /// Check if we have a pending commit to reveal
     pub fn has_pending_commit(&self) -> bool {
-        self.pending_commit.is_some()
+        self.state.pending_commit.is_some()
     }
 
     /// Prepare weights for submission
@@ -224,7 +356,8 @@ impl WeightSubmitter {
 
     /// Force reveal without new commit (if we have pending)
     pub async fn force_reveal(&mut self) -> Result<Option<String>> {
-        if let Some(pending) = self.pending_commit.take() {
+        if let Some(pending) = self.state.pending_commit.take() {
+            self.persist();
             let tx = self.reveal_pending_v2(pending).await?;
             Ok(Some(tx))
         } else {
@@ -337,6 +470,7 @@ impl WeightSubmitter {
                 weights: weights.clone(),
                 salt: salt.iter().map(|b| *b as u16).collect(),
                 version_key,
+                epoch: self.current_epoch,
             });
         }
 
@@ -354,15 +488,18 @@ impl WeightSubmitter {
         )
         .await?;
 
-        // Store pending commits for reveal
+        // Store pending commits for reveal and persist
         for pending in pending_commits {
-            self.pending_mechanism_commits
+            self.state
+                .pending_mechanism_commits
                 .insert(pending.mechanism_id, pending);
         }
+        self.state.committed_epoch = Some(self.current_epoch);
+        self.persist();
 
         info!(
-            "Batch mechanism commits submitted: {} (reveals pending)",
-            tx_hash
+            "Batch mechanism commits submitted: {} (reveals pending, epoch {})",
+            tx_hash, self.current_epoch
         );
         Ok(tx_hash)
     }
@@ -371,23 +508,29 @@ impl WeightSubmitter {
     pub async fn reveal_pending_mechanism_commits(&mut self) -> Result<Option<String>> {
         use bittensor_rs::reveal_mechanism_weights;
 
-        if self.pending_mechanism_commits.is_empty() {
+        if self.state.pending_mechanism_commits.is_empty() {
             return Ok(None);
         }
 
-        let pending: Vec<_> = self.pending_mechanism_commits.drain().collect();
+        let pending: Vec<_> = self.state.pending_mechanism_commits.drain().collect();
+        self.persist();
 
         info!("Revealing {} pending mechanism commits", pending.len());
 
         // Reveal each mechanism's weights
         // Batch reveal via mechanism weights API
         let mut last_tx = String::new();
+        let mut revealed_mechanisms = Vec::new();
+
         for (_, commit) in pending {
+            let mechanism_id = commit.mechanism_id;
+            let epoch = commit.epoch;
+
             let tx_hash = reveal_mechanism_weights(
                 self.client.client()?,
                 self.client.signer()?,
                 self.client.netuid(),
-                commit.mechanism_id,
+                mechanism_id,
                 &commit.uids,
                 &commit.weights,
                 &commit.salt,
@@ -397,18 +540,40 @@ impl WeightSubmitter {
             .await?;
 
             info!(
-                "Revealed mechanism {} weights: {}",
-                commit.mechanism_id, tx_hash
+                "Revealed mechanism {} weights: {} (epoch {})",
+                mechanism_id, tx_hash, epoch
             );
+            revealed_mechanisms.push((mechanism_id, epoch));
             last_tx = tx_hash;
         }
+
+        // Track revealed epochs
+        for (mechanism_id, epoch) in revealed_mechanisms {
+            self.state.last_revealed_epoch.insert(mechanism_id, epoch);
+        }
+        self.persist();
 
         Ok(Some(last_tx))
     }
 
     /// Check if there are pending mechanism commits to reveal
     pub fn has_pending_mechanism_commits(&self) -> bool {
-        !self.pending_mechanism_commits.is_empty()
+        !self.state.pending_mechanism_commits.is_empty()
+    }
+
+    /// Get pending commit info for logging
+    pub fn pending_commits_info(&self) -> String {
+        if self.state.pending_mechanism_commits.is_empty() {
+            "none".to_string()
+        } else {
+            let ids: Vec<_> = self.state.pending_mechanism_commits.keys().collect();
+            format!(
+                "{} mechanisms {:?} (epoch {:?})",
+                ids.len(),
+                ids,
+                self.state.committed_epoch
+            )
+        }
     }
 }
 

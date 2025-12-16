@@ -127,4 +127,18 @@ impl SubtensorClient {
         let client = self.client()?;
         get_mechanism_count(client, self.config.netuid).await
     }
+
+    /// Get current epoch from Bittensor
+    pub async fn get_current_epoch(&self) -> Result<u64> {
+        use bittensor_rs::blocks::{BlockListener, BlockListenerConfig};
+
+        let client = self.client()?;
+        let config = BlockListenerConfig {
+            netuid: self.config.netuid,
+            ..Default::default()
+        };
+        let listener = BlockListener::new(config);
+        let epoch_info = listener.current_epoch_info(client).await?;
+        Ok(epoch_info.epoch_number)
+    }
 }

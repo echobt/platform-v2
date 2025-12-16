@@ -503,7 +503,10 @@ async fn main() -> Result<()> {
                     Err(e) => warn!("Failed to sync metagraph: {}", e),
                 }
 
-                weight_submitter = Some(Arc::new(TokioMutex::new(WeightSubmitter::new(bt_client))));
+                weight_submitter = Some(Arc::new(TokioMutex::new(WeightSubmitter::new(
+                    bt_client,
+                    Some(data_dir.clone()),
+                ))));
 
                 // Setup block sync with a separate connection to Bittensor
                 // (BlockListener needs its own client for subscription)
@@ -707,58 +710,90 @@ async fn main() -> Result<()> {
     };
 
     // Submit initial weights on startup for ALL mechanisms
+    // But first check if we have pending commits from a previous session
     if let Some(ref submitter) = weight_submitter {
-        info!(
-            "Submitting initial weights on startup for {} mechanisms...",
-            subnet_mechanism_count
-        );
+        let mut sub = submitter.lock().await;
 
-        // Get registered challenge mechanisms
-        let registered_mechanisms = challenge_runtime.get_registered_mechanism_ids();
-        let registered_set: std::collections::HashSet<u8> =
-            registered_mechanisms.iter().copied().collect();
+        // Get current epoch from Bittensor
+        let current_epoch = match sub.client_mut().get_current_epoch().await {
+            Ok(epoch) => {
+                info!("Current Bittensor epoch: {}", epoch);
+                epoch
+            }
+            Err(e) => {
+                warn!("Failed to get current epoch: {}, using 0", e);
+                0
+            }
+        };
 
-        // Build weights for ALL mechanisms (0 to count-1)
-        let mut initial_weights: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
+        // Set epoch in submitter for state tracking
+        sub.set_epoch(current_epoch);
 
-        for mechanism_id in 0..subnet_mechanism_count {
-            if registered_set.contains(&mechanism_id) {
-                // This mechanism has a challenge - check for evaluation weights
-                let eval_weights = challenge_runtime.get_mechanism_weights_for_submission();
-                if let Some((_, uids, weights)) =
-                    eval_weights.iter().find(|(m, _, _)| *m == mechanism_id)
-                {
-                    info!(
-                        "Mechanism {} has evaluation weights ({} entries)",
-                        mechanism_id,
-                        uids.len()
-                    );
-                    initial_weights.push((mechanism_id, uids.clone(), weights.clone()));
+        // Check if we have pending commits from a previous session
+        if sub.has_pending_mechanism_commits() {
+            info!(
+                "Found pending commits from previous session: {}",
+                sub.pending_commits_info()
+            );
+            info!("Will reveal when reveal window opens - skipping initial commit");
+        } else if sub.has_committed_for_epoch(current_epoch) {
+            info!(
+                "Already committed for epoch {} in previous session - skipping initial commit",
+                current_epoch
+            );
+        } else {
+            // No pending commits - proceed with initial weight submission
+            info!(
+                "Submitting initial weights on startup for {} mechanisms...",
+                subnet_mechanism_count
+            );
+
+            // Get registered challenge mechanisms
+            let registered_mechanisms = challenge_runtime.get_registered_mechanism_ids();
+            let registered_set: std::collections::HashSet<u8> =
+                registered_mechanisms.iter().copied().collect();
+
+            // Build weights for ALL mechanisms (0 to count-1)
+            let mut initial_weights: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
+
+            for mechanism_id in 0..subnet_mechanism_count {
+                if registered_set.contains(&mechanism_id) {
+                    // This mechanism has a challenge - check for evaluation weights
+                    let eval_weights = challenge_runtime.get_mechanism_weights_for_submission();
+                    if let Some((_, uids, weights)) =
+                        eval_weights.iter().find(|(m, _, _)| *m == mechanism_id)
+                    {
+                        info!(
+                            "Mechanism {} has evaluation weights ({} entries)",
+                            mechanism_id,
+                            uids.len()
+                        );
+                        initial_weights.push((mechanism_id, uids.clone(), weights.clone()));
+                    } else {
+                        // Challenge registered but no evaluations yet - burn weights
+                        info!(
+                            "Mechanism {} (challenge registered) - submitting burn weights",
+                            mechanism_id
+                        );
+                        initial_weights.push((mechanism_id, vec![0u16], vec![65535u16]));
+                    }
                 } else {
-                    // Challenge registered but no evaluations yet - burn weights
+                    // No challenge for this mechanism - burn weights to UID 0
                     info!(
-                        "Mechanism {} (challenge registered) - submitting burn weights",
+                        "Mechanism {} (no challenge) - submitting burn weights to UID 0",
                         mechanism_id
                     );
                     initial_weights.push((mechanism_id, vec![0u16], vec![65535u16]));
                 }
-            } else {
-                // No challenge for this mechanism - burn weights to UID 0
-                info!(
-                    "Mechanism {} (no challenge) - submitting burn weights to UID 0",
-                    mechanism_id
-                );
-                initial_weights.push((mechanism_id, vec![0u16], vec![65535u16]));
             }
-        }
 
-        let mut sub = submitter.lock().await;
-        match sub.submit_mechanism_weights_batch(&initial_weights).await {
-            Ok(tx) => info!("Initial weights submitted to Bittensor: {}", tx),
-            Err(e) => warn!(
-                "Failed to submit initial weights (will retry at next epoch): {}",
-                e
-            ),
+            match sub.submit_mechanism_weights_batch(&initial_weights).await {
+                Ok(tx) => info!("Initial weights submitted to Bittensor: {}", tx),
+                Err(e) => warn!(
+                    "Failed to submit initial weights (will retry at next epoch): {}",
+                    e
+                ),
+            }
         }
     }
 
@@ -831,10 +866,26 @@ async fn main() -> Result<()> {
                         // Collect and commit weights for all mechanisms
                         // This is the primary trigger for weight submission (event-driven from Bittensor)
 
-                        // Collect weights from all challenges (async)
-                        let mechanism_weights = runtime_for_blocks.collect_and_get_weights().await;
-
                         if let Some(ref submitter) = weight_submitter_clone {
+                            let mut sub = submitter.lock().await;
+
+                            // Update epoch in submitter for state tracking
+                            sub.set_epoch(epoch);
+
+                            // Check if we already committed for this epoch (e.g., at startup)
+                            if sub.has_committed_for_epoch(epoch) {
+                                info!(
+                                    "Already committed weights for epoch {} (pending: {}), skipping commit",
+                                    epoch, sub.pending_commits_info()
+                                );
+                                continue;
+                            }
+
+                            // Collect weights from all challenges (async)
+                            drop(sub); // Release lock before async collect
+                            let mechanism_weights = runtime_for_blocks.collect_and_get_weights().await;
+                            let mut sub = submitter.lock().await;
+
                             let weights_to_submit = if mechanism_weights.is_empty() {
                                 // No challenge weights - submit burn weights to UID 0
                                 info!("No challenge weights for epoch {} - submitting burn weights", epoch);
@@ -844,7 +895,6 @@ async fn main() -> Result<()> {
                                 mechanism_weights
                             };
 
-                            let mut sub = submitter.lock().await;
                             match sub.submit_mechanism_weights_batch(&weights_to_submit).await {
                                 Ok(tx) => info!("Mechanism weights committed to Bittensor: {}", tx),
                                 Err(e) => error!("Failed to commit mechanism weights: {}", e),
