@@ -1,0 +1,80 @@
+# Challenge Container Dockerfile
+# For Rust-based challenges that implement the Challenge trait
+#
+# Usage:
+#   docker build -f docker/Dockerfile.challenge \
+#     --build-arg CHALLENGE_NAME=term-challenge \
+#     --build-arg CHALLENGE_DIR=challenges/term-challenge \
+#     -t cortexlm/challenge-term-bench:v1.0.0 .
+
+# ===== Build Stage =====
+FROM rust:1.82-bookworm as builder
+
+ARG CHALLENGE_NAME=term-challenge
+ARG CHALLENGE_DIR=challenges/term-challenge
+
+WORKDIR /app
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy mini-chain SDK (challenges depend on it)
+COPY mini-chain/crates/challenge-sdk /app/mini-chain/crates/challenge-sdk
+COPY mini-chain/crates/core /app/mini-chain/crates/core
+COPY mini-chain/Cargo.toml /app/mini-chain/Cargo.toml
+
+# Copy challenge source
+COPY ${CHALLENGE_DIR} /app/challenge
+
+WORKDIR /app/challenge
+
+# Build release binary
+RUN cargo build --release
+
+# ===== Runtime Stage =====
+FROM debian:bookworm-slim
+
+ARG CHALLENGE_NAME=term-challenge
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    docker.io \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create challenge user
+RUN useradd -m -s /bin/bash challenge
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/challenge/target/release/${CHALLENGE_NAME} /app/challenge
+
+# Copy tasks directory if exists
+COPY --from=builder /app/challenge/tasks /app/tasks 2>/dev/null || true
+
+# Create data directories
+RUN mkdir -p /data /app/tasks && chown -R challenge:challenge /data /app
+
+# Environment variables
+ENV RUST_LOG=info
+ENV CHALLENGE_PORT=8080
+ENV DATA_DIR=/data
+ENV TASKS_DIR=/app/tasks
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+USER challenge
+
+ENTRYPOINT ["/app/challenge"]

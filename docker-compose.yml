@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # Platform Chain Validator Node
+  # ==========================================================================
+  validator:
+    image: ghcr.io/platformnetwork/platform:latest
+    container_name: platform-validator
+    restart: unless-stopped
+    privileged: true
+    
+    # Enable Watchtower auto-update for this container only
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    ports:
+      - "8080:8080"   # RPC API
+      - "9000:9000"   # P2P Network
+    
+    volumes:
+      - validator-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    
+    environment:
+      - RUST_LOG=info,platform_chain=debug
+      - DATA_DIR=/data
+      - VALIDATOR_SECRET_KEY=${VALIDATOR_SECRET_KEY}
+      - BOOTSTRAP_PEERS=/dns4/bootnode.platform.network/tcp/9000
+    
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    networks:
+      - platform-network
+
+  # ==========================================================================
+  # Watchtower - Auto-update platform container only
+  # ==========================================================================
+  watchtower:
+    image: nickfedor/watchtower@sha256:053e7ecba848b77eb5b966d236c2f4f2e1155e05007c9ef52418b4b7e255484b
+    container_name: platform-watchtower
+    restart: unless-stopped
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    
+    environment:
+      # Only update containers with label "com.centurylinklabs.watchtower.enable=true"
+      - WATCHTOWER_LABEL_ENABLE=true
+      # Check at :00, :05, :10, :15... (all validators sync at same time)
+      - WATCHTOWER_SCHEDULE=0 */5 * * * *
+      # Remove old images after update
+      - WATCHTOWER_CLEANUP=true
+      # Include stopped containers
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      # Logging
+      - WATCHTOWER_LOG_LEVEL=info
+    
+    networks:
+      - platform-network
+
+volumes:
+  validator-data:
+    driver: local
+
+networks:
+  platform-network:
+    driver: bridge

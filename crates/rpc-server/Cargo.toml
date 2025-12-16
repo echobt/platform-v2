@@ -1,0 +1,39 @@
+[package]
+name = "platform-rpc"
+version.workspace = true
+edition.workspace = true
+description = "HTTP RPC server for Mini-Chain validators"
+
+[dependencies]
+platform-core = { path = "../core" }
+platform-challenge-sdk = { path = "../challenge-sdk" }
+platform-subnet-manager = { path = "../subnet-manager" }
+
+# HTTP Server
+axum = { version = "0.7", features = ["json", "tokio"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Crypto
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+
+# Utils
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }

@@ -1,0 +1,68 @@
+# Validator Node Docker Image
+# Multi-stage build for minimal runtime image
+
+# ===== Build Stage =====
+FROM rust:1.82-bookworm as builder
+
+WORKDIR /app
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bins ./bins
+COPY tests ./tests
+
+# Build release binary
+RUN cargo build --release --bin validator-node
+
+# ===== Runtime Stage =====
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash validator
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/target/release/validator-node /app/validator-node
+
+# Copy entrypoint script
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Create data directory
+RUN mkdir -p /data && chown validator:validator /data
+
+# Environment variables
+ENV RUST_LOG=info
+ENV DATA_DIR=/data
+
+# Expose ports
+# P2P port
+EXPOSE 9000
+# RPC port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run as validator user
+USER validator
+
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["validator-node"]

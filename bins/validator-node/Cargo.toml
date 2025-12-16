@@ -1,0 +1,47 @@
+[package]
+name = "validator-node"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "validator-node"
+path = "src/main.rs"
+
+[dependencies]
+platform-core = { path = "../../crates/core" }
+platform-network = { path = "../../crates/network" }
+platform-consensus = { path = "../../crates/consensus" }
+platform-storage = { path = "../../crates/storage" }
+platform-challenge-runtime = { path = "../../crates/challenge-runtime" }
+platform-challenge-sdk = { path = "../../crates/challenge-sdk" }
+platform-epoch = { path = "../../crates/epoch" }
+platform-bittensor = { path = "../../crates/bittensor-integration" }
+platform-rpc = { path = "../../crates/rpc-server" }
+platform-subnet-manager = { path = "../../crates/subnet-manager" }
+challenge-orchestrator = { path = "../../crates/challenge-orchestrator" }
+distributed-db = { path = "../../crates/distributed-db" }
+
+# Challenges are loaded dynamically from ChainState (Docker containers)
+# No hardcoded challenge dependencies
+
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+
+# HTTP client for proxying to challenges
+reqwest = { version = "0.12", features = ["json"] }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+clap = { workspace = true, features = ["env"] }
+anyhow = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
