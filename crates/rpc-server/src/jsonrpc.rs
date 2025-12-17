@@ -187,6 +187,8 @@ pub struct RpcHandler {
     pub route_handler: Arc<RwLock<Option<ChallengeRouteHandler>>>,
     /// Channel to send signed messages for P2P broadcast
     pub broadcast_tx: Arc<RwLock<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Keypair for signing P2P messages (optional, set by validator)
+    pub keypair: Arc<RwLock<Option<platform_core::Keypair>>>,
 }
 
 impl RpcHandler {
@@ -201,7 +203,13 @@ impl RpcHandler {
             challenge_routes: Arc::new(RwLock::new(HashMap::new())),
             route_handler: Arc::new(RwLock::new(None)),
             broadcast_tx: Arc::new(RwLock::new(None)),
+            keypair: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set the keypair for signing P2P messages
+    pub fn set_keypair(&self, keypair: platform_core::Keypair) {
+        *self.keypair.write() = Some(keypair);
     }
 
     /// Set the broadcast channel for P2P message sending

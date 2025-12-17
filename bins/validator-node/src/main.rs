@@ -589,6 +589,9 @@ async fn main() -> Result<()> {
             tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         rpc_handler.set_broadcast_tx(rpc_broadcast_tx.clone());
 
+        // Set keypair for signing P2P messages (for webhook progress broadcasts)
+        rpc_handler.set_keypair(keypair.clone());
+
         // Also set the agent broadcast channel (used by route handler for /submit)
         *agent_broadcast_tx.write() = Some(rpc_broadcast_tx);
 

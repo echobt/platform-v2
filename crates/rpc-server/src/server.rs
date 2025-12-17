@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 /// RPC server configuration
 #[derive(Clone, Debug)]
@@ -169,6 +169,14 @@ impl RpcServer {
                         }
                     },
                 )
+            })
+            // Webhook endpoint for progress callbacks from challenge containers
+            .route("/webhook/progress", {
+                let handler = rpc_handler.clone();
+                post(move |body: Json<Value>| {
+                    let handler = handler.clone();
+                    async move { webhook_progress_handler(handler, body.0).await }
+                })
             })
             .with_state(self.state.clone())
             .layer(TraceLayer::new_for_http());
@@ -398,6 +406,136 @@ fn handle_single_request(body: Value, handler: &RpcHandler) -> (StatusCode, Json
     };
 
     (status, Json(response))
+}
+
+/// Handler for webhook progress callbacks from challenge containers
+/// Broadcasts TaskProgressMessage via P2P to other validators
+async fn webhook_progress_handler(handler: Arc<RpcHandler>, body: Value) -> impl IntoResponse {
+    use platform_core::{Keypair, NetworkMessage, SignedNetworkMessage, TaskProgressMessage};
+
+    // Parse the progress data
+    let msg_type = body.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    match msg_type {
+        "task_progress" => {
+            // Extract task progress data
+            let progress = TaskProgressMessage {
+                challenge_id: body
+                    .get("challenge_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                agent_hash: body
+                    .get("agent_hash")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                evaluation_id: body
+                    .get("evaluation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                task_id: body
+                    .get("task_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                task_index: body.get("task_index").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                total_tasks: body
+                    .get("total_tasks")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                passed: body
+                    .get("passed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                score: body.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                execution_time_ms: body
+                    .get("execution_time_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                cost_usd: body.get("cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                error: body.get("error").and_then(|v| v.as_str()).map(String::from),
+                validator_hotkey: body
+                    .get("validator_hotkey")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                timestamp: chrono::Utc::now().timestamp() as u64,
+            };
+
+            info!(
+                "Webhook received task progress: [{}/{}] agent={} task={} passed={}",
+                progress.task_index,
+                progress.total_tasks,
+                &progress.agent_hash[..16.min(progress.agent_hash.len())],
+                progress.task_id,
+                progress.passed
+            );
+
+            // Broadcast via P2P if we have a broadcast channel and keypair
+            let broadcast_tx = handler.broadcast_tx.read();
+            let keypair = handler.keypair.read();
+
+            if let (Some(tx), Some(kp)) = (broadcast_tx.as_ref(), keypair.as_ref()) {
+                let network_msg = NetworkMessage::TaskProgress(progress.clone());
+
+                match SignedNetworkMessage::new(network_msg, kp) {
+                    Ok(signed) => {
+                        if let Ok(bytes) = bincode::serialize(&signed) {
+                            if tx.send(bytes).is_ok() {
+                                debug!("TaskProgress broadcast via P2P: task={}", progress.task_id);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to sign TaskProgress message: {}", e);
+                    }
+                }
+            } else if broadcast_tx.is_none() {
+                debug!("No broadcast channel available for TaskProgress");
+            } else if keypair.is_none() {
+                debug!("No keypair available for signing TaskProgress");
+            }
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "message": "Task progress received"
+                })),
+            )
+        }
+        "evaluation_complete" => {
+            info!(
+                "Webhook received evaluation complete: agent={} score={:.2}",
+                body.get("agent_hash")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
+                body.get("final_score")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+            );
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "message": "Evaluation complete received"
+                })),
+            )
+        }
+        _ => {
+            warn!("Unknown webhook type: {}", msg_type);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Unknown webhook type: {}", msg_type)
+                })),
+            )
+        }
+    }
 }
 
 /// Quick helper to create and start a server
