@@ -3,6 +3,10 @@
 //! This module handles submitting weights to the Bittensor network using the
 //! commit-reveal pattern that matches subtensor's exact format.
 //!
+//! ## CRv4 Support
+//! When commit_reveal_version == 4, uses timelock encryption (TLE) for automatic
+//! on-chain reveal. The chain decrypts weights when DRAND pulse becomes available.
+//!
 //! ## Persistence
 //! Commits are persisted to disk to survive restarts. This ensures that if
 //! the validator restarts between commit and reveal, it can still reveal
@@ -18,6 +22,12 @@ use bittensor_rs::validator_weights::{
 use bittensor_rs::{
     commit_mechanism_weights, get_next_epoch_start_block, reveal_mechanism_weights,
     set_mechanism_weights,
+};
+// CRv4 imports (no persistence needed - chain auto-reveals)
+use bittensor_rs::crv4::{
+    calculate_reveal_round, commit_timelocked_mechanism_weights, get_commit_reveal_version,
+    get_mechid_storage_index, get_reveal_period, get_tempo, prepare_crv4_commit,
+    DEFAULT_COMMIT_REVEAL_VERSION,
 };
 use platform_challenge_sdk::WeightAssignment;
 use serde::{Deserialize, Serialize};
@@ -104,12 +114,14 @@ impl PersistedCommitState {
 /// Weight submission manager with persistence
 pub struct WeightSubmitter {
     client: SubtensorClient,
-    /// Persisted commit state
+    /// Persisted commit state (for hash-based commit-reveal v2/v3)
     state: PersistedCommitState,
     /// Path to persistence file
     persist_path: PathBuf,
     /// Current epoch (updated externally)
     current_epoch: u64,
+    /// Cached commit-reveal version from chain
+    cached_crv_version: Option<u16>,
 }
 
 /// Pending mechanism commit data
@@ -207,7 +219,28 @@ impl WeightSubmitter {
             state,
             persist_path,
             current_epoch: 0,
+            cached_crv_version: None,
         }
+    }
+
+    /// Get commit-reveal version from chain (cached)
+    pub async fn get_crv_version(&mut self) -> Result<u16> {
+        if let Some(v) = self.cached_crv_version {
+            return Ok(v);
+        }
+
+        let client = self.client.client()?;
+        let version = get_commit_reveal_version(client)
+            .await
+            .unwrap_or(DEFAULT_COMMIT_REVEAL_VERSION);
+        self.cached_crv_version = Some(version);
+        info!("Commit-reveal version from chain: {}", version);
+        Ok(version)
+    }
+
+    /// Check if CRv4 (timelock encryption) is enabled
+    pub async fn is_crv4_enabled(&mut self) -> bool {
+        self.get_crv_version().await.unwrap_or(0) >= 4
     }
 
     /// Get mutable access to the client
@@ -424,6 +457,11 @@ impl WeightSubmitter {
     /// This is used at epoch end to submit all mechanism weights at once.
     ///
     /// mechanism_weights: Vec<(mechanism_id, uids, weights)>
+    ///
+    /// Automatically selects the appropriate method:
+    /// - CRv4: Uses timelock encryption (chain auto-reveals)
+    /// - CRv2/v3: Uses hash-based commit-reveal (needs manual reveal)
+    /// - Direct: No commit-reveal
     pub async fn submit_mechanism_weights_batch(
         &mut self,
         mechanism_weights: &[(u8, Vec<u16>, Vec<u16>)],
@@ -432,13 +470,100 @@ impl WeightSubmitter {
             return Err(anyhow::anyhow!("No mechanism weights to submit"));
         }
 
-        if self.client.use_commit_reveal() {
-            self.submit_mechanism_weights_batch_commit_reveal(mechanism_weights)
-                .await
-        } else {
-            self.submit_mechanism_weights_batch_direct(mechanism_weights)
-                .await
+        // Check commit-reveal mode
+        if !self.client.use_commit_reveal() {
+            return self
+                .submit_mechanism_weights_batch_direct(mechanism_weights)
+                .await;
         }
+
+        // Check CRv4 (timelock encryption)
+        let crv_version = self.get_crv_version().await.unwrap_or(0);
+        if crv_version >= 4 {
+            info!("Using CRv4 (timelock encryption) for weight submission");
+            return self
+                .submit_mechanism_weights_batch_crv4(mechanism_weights)
+                .await;
+        }
+
+        // Fall back to hash-based commit-reveal
+        self.submit_mechanism_weights_batch_commit_reveal(mechanism_weights)
+            .await
+    }
+
+    /// Submit mechanism weights using CRv4 (timelock encryption)
+    /// No manual reveal needed - chain decrypts automatically when DRAND pulse arrives
+    async fn submit_mechanism_weights_batch_crv4(
+        &mut self,
+        mechanism_weights: &[(u8, Vec<u16>, Vec<u16>)],
+    ) -> Result<String> {
+        let client = self.client.client()?;
+        let signer = self.client.signer()?;
+        let netuid = self.client.netuid();
+        let version_key = self.client.version_key();
+        let hotkey_bytes = signer.account_id().0.to_vec();
+
+        // Get chain parameters for reveal round calculation
+        let current_block = client.block_number().await?;
+        let tempo = get_tempo(client, netuid).await.unwrap_or(360);
+        let reveal_period = get_reveal_period(client, netuid).await.unwrap_or(1);
+        let block_time = 12.0; // Standard Bittensor block time
+        let crv_version = self
+            .cached_crv_version
+            .unwrap_or(DEFAULT_COMMIT_REVEAL_VERSION);
+
+        let mut last_tx = String::new();
+        let mut committed_count = 0;
+
+        for (mechanism_id, uids, weights) in mechanism_weights {
+            // Calculate reveal round for this mechanism
+            let storage_index = get_mechid_storage_index(netuid, *mechanism_id);
+            let reveal_round = calculate_reveal_round(
+                tempo,
+                current_block,
+                storage_index,
+                reveal_period,
+                block_time,
+            );
+
+            // Encrypt payload using TLE
+            let encrypted =
+                prepare_crv4_commit(&hotkey_bytes, uids, weights, version_key, reveal_round)?;
+
+            info!(
+                "CRv4 committing mechanism {}: {} uids, reveal_round={}",
+                mechanism_id,
+                uids.len(),
+                reveal_round
+            );
+
+            // Submit timelocked commit - no persistence needed, chain auto-reveals
+            let tx_hash = commit_timelocked_mechanism_weights(
+                client,
+                signer,
+                netuid,
+                *mechanism_id,
+                &encrypted,
+                reveal_round,
+                crv_version,
+                ExtrinsicWait::Finalized,
+            )
+            .await?;
+
+            info!(
+                "CRv4 mechanism {} committed: {} (auto-reveal at round {})",
+                mechanism_id, tx_hash, reveal_round
+            );
+
+            last_tx = tx_hash;
+            committed_count += 1;
+        }
+
+        info!(
+            "CRv4 batch complete: {} mechanisms committed (no reveal needed)",
+            committed_count
+        );
+        Ok(last_tx)
     }
 
     /// Submit mechanism weights directly (without commit-reveal)
