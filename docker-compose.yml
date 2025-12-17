@@ -26,7 +26,13 @@ services:
       - RUST_LOG=info,platform_chain=debug
       - DATA_DIR=/data
       - VALIDATOR_SECRET_KEY=${VALIDATOR_SECRET_KEY}
-      - BOOTSTRAP_PEERS=/dns4/bootnode.platform.network/tcp/9000
+    
+    command:
+      - validator-node
+      - --data-dir
+      - /data
+      - --bootstrap-peer
+      - /dns4/bootnode.platform.network/tcp/9000
     
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
