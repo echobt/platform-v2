@@ -716,10 +716,11 @@ async fn main() -> Result<()> {
         })
         .unwrap_or_default();
 
-    // Create network node
+    // Create network node with deterministic peer ID from validator keypair
     let node_config = NodeConfig {
         listen_addr: args.listen.parse()?,
         bootstrap_peers,
+        identity_seed: Some(keypair.secret_bytes()),
         ..Default::default()
     };
 

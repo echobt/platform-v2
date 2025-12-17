@@ -30,6 +30,11 @@ pub struct NodeConfig {
 
     /// Enable mDNS for local peer discovery
     pub enable_mdns: bool,
+
+    /// Optional seed for deterministic peer ID (32 bytes)
+    /// If provided, the libp2p keypair will be derived from this seed
+    /// This ensures stable peer ID across restarts
+    pub identity_seed: Option<[u8; 32]>,
 }
 
 impl Default for NodeConfig {
@@ -39,6 +44,7 @@ impl Default for NodeConfig {
             bootstrap_peers: vec![],
             idle_timeout: Duration::from_secs(60),
             enable_mdns: false, // Disabled by default to avoid errors on special interfaces
+            identity_seed: None,
         }
     }
 }
@@ -96,10 +102,22 @@ pub struct NetworkNode {
 impl NetworkNode {
     /// Create a new network node
     pub async fn new(config: NodeConfig) -> anyhow::Result<Self> {
-        let local_key = Keypair::generate_ed25519();
+        // Use provided seed for deterministic peer ID, or generate random
+        let local_key = if let Some(seed) = config.identity_seed {
+            // Derive libp2p Ed25519 keypair from seed
+            let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(seed.clone())
+                .map_err(|e| anyhow::anyhow!("Invalid identity seed: {}", e))?;
+            let ed25519_keypair = libp2p::identity::ed25519::Keypair::from(secret);
+            Keypair::from(ed25519_keypair)
+        } else {
+            Keypair::generate_ed25519()
+        };
         let local_peer_id = PeerId::from(local_key.public());
 
         info!("Local peer ID: {}", local_peer_id);
+        if config.identity_seed.is_some() {
+            info!("Using deterministic peer ID from validator keypair");
+        }
 
         let behaviour = MiniChainBehaviour::new(&local_key, config.enable_mdns)?;
 
