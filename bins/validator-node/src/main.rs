@@ -142,9 +142,9 @@ async fn main() -> Result<()> {
     // The internal keypair uses the same derivation as Bittensor (SR25519)
     let bittensor_seed = args.secret_key.clone();
 
-    // Derive keypair for internal use
-    // Try to use the same derivation as Bittensor (SR25519 from mnemonic)
-    let keypair = {
+    // Derive keypair using proper Substrate SR25519 derivation (same as Bittensor)
+    // This ensures the hotkey matches what Bittensor expects
+    let (keypair, identity_seed) = {
         let secret = &args.secret_key;
 
         // Strip 0x prefix if present
@@ -157,28 +157,29 @@ async fn main() -> Result<()> {
             }
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
-            Keypair::from_bytes(&arr)?
+            let kp = Keypair::from_bytes(&arr)?;
+            (kp, arr)
         } else {
-            // Mnemonic phrase - use BIP39 + SR25519 derivation (same as Bittensor)
-            // We use sp_core to derive the same key as Bittensor
-            use sha2::{Digest, Sha256};
+            // Mnemonic phrase - use proper Substrate SR25519 derivation
+            use sp_core::crypto::Pair as CryptoPair;
+            use sp_core::sr25519;
 
-            // Hash the mnemonic to get a deterministic seed
-            // This matches the internal derivation we need for signing
-            let mut hasher = Sha256::new();
-            hasher.update(secret.as_bytes());
-            let hash = hasher.finalize();
+            // Derive SR25519 keypair using same method as bittensor-rs
+            let sr25519_pair = sr25519::Pair::from_string(secret, None)
+                .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {:?}", e))?;
 
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&hash);
+            // Get the public key bytes (32 bytes) - this is the hotkey
+            let pubkey_bytes: [u8; 32] = sr25519_pair.public().0;
 
-            info!("Derived internal keypair from mnemonic");
-            Keypair::from_bytes(&arr)?
+            // Use public key bytes as seed for internal Ed25519 keypair
+            // This ensures peer ID is derived from the hotkey
+            let kp = Keypair::from_bytes(&pubkey_bytes)?;
+
+            info!("Derived keypair from Substrate mnemonic (SR25519)");
+            (kp, pubkey_bytes)
         }
     };
 
-    // Note: The actual Bittensor hotkey will be shown after connecting to Bittensor
-    // The internal keypair is used for P2P message signing
     info!("Internal keypair derived (P2P signing)");
 
     // Canonicalize data directory to ensure absolute paths for Docker
@@ -716,11 +717,11 @@ async fn main() -> Result<()> {
         })
         .unwrap_or_default();
 
-    // Create network node with deterministic peer ID from validator keypair
+    // Create network node with deterministic peer ID derived from hotkey public key
     let node_config = NodeConfig {
         listen_addr: args.listen.parse()?,
         bootstrap_peers,
-        identity_seed: Some(keypair.secret_bytes()),
+        identity_seed: Some(identity_seed),
         ..Default::default()
     };
 
