@@ -306,16 +306,6 @@ Low confidence (high variance) may exclude submission from weights.
 
 ## Formal Analysis
 
-### Validator Utility Maximization
-
-Validators maximize reputation by submitting accurate evaluations:
-
-$$\max_{s_i^v} \quad \mathbb{E}[\text{reputation}_v]$$
-
-Subject to:
-- Evaluation must be reproducible: $s_i^v = \text{eval}(A_i)$
-- Must match consensus: $|s_i^v - \bar{s}_i| < \epsilon$
-
 ### Miner Utility Maximization
 
 Miners maximize reward by submitting high-performing solutions:
