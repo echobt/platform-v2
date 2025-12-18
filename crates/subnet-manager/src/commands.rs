@@ -161,6 +161,7 @@ pub struct CommandExecutor {
 
 impl CommandExecutor {
     /// Create a new command executor
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sudo_key: Hotkey,
         data_dir: PathBuf,
@@ -206,6 +207,7 @@ impl CommandExecutor {
     }
 
     /// Execute a command (internal, no signature check)
+    #[allow(clippy::await_holding_lock)]
     async fn execute_command(&self, cmd: &SubnetCommand) -> CommandResult {
         match cmd {
             // === Challenge Management ===

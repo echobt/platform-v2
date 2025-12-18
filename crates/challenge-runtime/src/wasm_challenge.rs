@@ -412,6 +412,7 @@ impl<H: HostFunctions> TerminalBenchWasm<H> {
     }
 
     /// Reveal weights (during reveal phase)
+    #[allow(clippy::await_holding_lock)]
     pub async fn reveal_weights(&self) -> Result<(), String> {
         if self.epoch_sync.get_phase() != EpochPhase::Reveal {
             return Err("Not in reveal phase".to_string());

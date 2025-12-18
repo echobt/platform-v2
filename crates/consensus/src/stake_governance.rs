@@ -252,6 +252,7 @@ impl ProposalVote {
 
 /// Result of a stake-based governance consensus check
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum StakeConsensusResult {
     /// Proposal approved with required stake
     Approved {
@@ -310,6 +311,7 @@ pub struct ValidatorStake {
 // ============================================================================
 
 /// Stake-based governance consensus engine
+#[allow(clippy::type_complexity)]
 pub struct StakeGovernance {
     /// Current block height
     current_block: Arc<RwLock<u64>>,

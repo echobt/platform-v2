@@ -262,11 +262,14 @@ impl NetworkNode {
                     .await;
             }
             SwarmEvent::IncomingConnection { .. } => {}
-            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                if let Some(peer_id) = peer_id {
-                    warn!("Failed to connect to {}: {}", peer_id, error);
-                }
+            SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(peer_id),
+                error,
+                ..
+            } => {
+                warn!("Failed to connect to {}: {}", peer_id, error);
             }
+            SwarmEvent::OutgoingConnectionError { .. } => {}
             _ => {}
         }
     }
@@ -315,11 +318,14 @@ impl NetworkNode {
                     .await;
             }
             SwarmEvent::IncomingConnection { .. } => {}
-            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                if let Some(peer_id) = peer_id {
-                    warn!("Failed to connect to {}: {}", peer_id, error);
-                }
+            SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(peer_id),
+                error,
+                ..
+            } => {
+                warn!("Failed to connect to {}: {}", peer_id, error);
             }
+            SwarmEvent::OutgoingConnectionError { .. } => {}
             _ => {}
         }
     }

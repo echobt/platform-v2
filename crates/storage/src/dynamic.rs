@@ -23,6 +23,7 @@ use std::time::{Duration, SystemTime};
 use tracing::{info, trace};
 
 /// Dynamic storage manager
+#[allow(clippy::type_complexity)]
 pub struct DynamicStorage {
     /// Main storage tree
     tree: Tree,

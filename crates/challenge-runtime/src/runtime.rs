@@ -401,11 +401,12 @@ impl ChallengeRuntime {
         let all_mechanisms = self.mechanism_weights.read().list_mechanisms();
 
         for mechanism_id in all_mechanisms {
-            if let Some(mech_weights) = self
+            // Get mechanism weights, releasing lock before await
+            let mech_weights = self
                 .mechanism_weights
                 .read()
-                .get_mechanism_weights(mechanism_id)
-            {
+                .get_mechanism_weights(mechanism_id);
+            if let Some(mech_weights) = mech_weights {
                 // Create commitment for this mechanism
                 let commitment = MechanismCommitment::new(
                     mechanism_id,
@@ -448,11 +449,12 @@ impl ChallengeRuntime {
         let all_mechanisms = self.mechanism_weights.read().list_mechanisms();
 
         for mechanism_id in all_mechanisms {
-            if let Some(mech_weights) = self
+            // Get mechanism weights, releasing lock before await
+            let mech_weights = self
                 .mechanism_weights
                 .read()
-                .get_mechanism_weights(mechanism_id)
-            {
+                .get_mechanism_weights(mechanism_id);
+            if let Some(mech_weights) = mech_weights {
                 match self
                     .mechanism_commit_reveal
                     .reveal(mechanism_id, mech_weights.clone())

@@ -218,6 +218,7 @@ impl GovernancePBFT {
 
 /// Result of sudo action execution
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum SudoExecutionResult {
     /// Executed directly during bootstrap period
     ExecutedBootstrap { proposal_id: uuid::Uuid },

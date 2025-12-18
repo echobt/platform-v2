@@ -48,10 +48,15 @@ impl LifecycleManager {
     pub async fn update(&mut self, config: ChallengeContainerConfig) -> anyhow::Result<()> {
         let challenge_id = config.challenge_id;
 
-        // Stop existing container
-        if let Some(instance) = self.challenges.read().get(&challenge_id) {
-            self.docker.stop_container(&instance.container_id).await?;
-            self.docker.remove_container(&instance.container_id).await?;
+        // Stop existing container - get container_id first, then release lock before await
+        let container_id = self
+            .challenges
+            .read()
+            .get(&challenge_id)
+            .map(|i| i.container_id.clone());
+        if let Some(container_id) = container_id {
+            self.docker.stop_container(&container_id).await?;
+            self.docker.remove_container(&container_id).await?;
         }
 
         // Pull new image
@@ -70,7 +75,9 @@ impl LifecycleManager {
 
     /// Remove a challenge
     pub async fn remove(&mut self, challenge_id: ChallengeId) -> anyhow::Result<()> {
-        if let Some(instance) = self.challenges.write().remove(&challenge_id) {
+        // Remove instance and get container_id before await
+        let instance = self.challenges.write().remove(&challenge_id);
+        if let Some(instance) = instance {
             self.docker.stop_container(&instance.container_id).await?;
             self.docker.remove_container(&instance.container_id).await?;
         }

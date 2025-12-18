@@ -82,6 +82,7 @@ impl PBFTEngine {
     }
 
     /// Propose a new block
+    #[allow(clippy::await_holding_lock)]
     pub async fn propose_block(&self) -> Result<uuid::Uuid> {
         let state = self.chain_state.read();
         let block_height = state.block_height;
@@ -190,7 +191,7 @@ impl PBFTEngine {
         match result {
             ConsensusResult::Approved(proposal) => {
                 info!("Consensus reached for proposal: {:?}", proposal.id);
-                self.apply_proposal(proposal).await?;
+                self.apply_proposal(*proposal).await?;
             }
             ConsensusResult::Rejected {
                 proposal_id,

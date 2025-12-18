@@ -1904,12 +1904,14 @@ async fn main() -> Result<()> {
 }
 
 /// Commands to send to the network task
+#[allow(clippy::large_enum_variant)]
 enum NetworkCommand {
     Broadcast(SignedNetworkMessage),
     BroadcastRaw(Vec<u8>), // For RPC sudo_submit - already serialized
     SendResponse(platform_network::ResponseChannelWrapper, SyncResponse),
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 async fn handle_message(
     consensus: &PBFTEngine,
     msg: SignedNetworkMessage,

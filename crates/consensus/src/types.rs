@@ -92,7 +92,7 @@ impl RoundState {
 #[derive(Clone, Debug)]
 pub enum ConsensusResult {
     /// Consensus reached
-    Approved(Proposal),
+    Approved(Box<Proposal>),
 
     /// Consensus failed (rejected or timeout)
     Rejected {

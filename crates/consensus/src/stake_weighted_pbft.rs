@@ -147,6 +147,7 @@ impl StakeWeightedRoundState {
 
 /// Result of stake-weighted consensus check
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum StakeWeightedResult {
     /// Proposal approved with required stake
     Approved {
@@ -262,6 +263,7 @@ impl StakeWeightedPBFT {
     }
 
     /// Propose a new block
+    #[allow(clippy::await_holding_lock)]
     pub async fn propose_block(&self) -> Result<Uuid> {
         let state = self.chain_state.read();
         let block_height = state.block_height;

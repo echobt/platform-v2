@@ -65,7 +65,7 @@ impl ConsensusState {
             // Check if consensus reached
             if round.has_consensus(threshold) {
                 round.phase = ConsensusPhase::Completed;
-                Some(ConsensusResult::Approved(round.proposal.clone()))
+                Some(ConsensusResult::Approved(Box::new(round.proposal.clone())))
             }
             // Check if rejection is certain
             else if round.is_rejected(validator_count, threshold) {

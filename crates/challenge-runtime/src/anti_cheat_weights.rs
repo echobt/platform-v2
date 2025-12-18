@@ -303,6 +303,7 @@ impl AntiCheatWeightCalculator {
     }
 
     /// Process a single agent's scores
+    #[allow(clippy::too_many_arguments)]
     fn process_agent(
         &self,
         agent_hash: &str,
