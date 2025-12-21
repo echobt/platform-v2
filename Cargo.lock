@@ -1322,6 +1322,7 @@ dependencies = [
  "parking_lot 0.12.5",
  "platform-core",
  "reqwest 0.12.25",
+ "secure-container-runtime",
  "serde",
  "serde_json",
  "tempfile",

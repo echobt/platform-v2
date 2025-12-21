@@ -5,13 +5,25 @@
 //! - Health monitoring
 //! - Evaluation routing
 //! - Hot-swap without core restart
+//!
+//! ## Backend Selection
+//!
+//! The orchestrator supports two backends:
+//! - **Direct Docker** (default): For local development and testing
+//! - **Secure Broker**: For production validators, uses Unix socket API
+//!
+//! Set `CONTAINER_BROKER_SOCKET=/var/run/platform/broker.sock` to use the secure broker.
 
+pub mod backend;
 pub mod config;
 pub mod docker;
 pub mod evaluator;
 pub mod health;
 pub mod lifecycle;
 
+pub use backend::{
+    create_backend, is_secure_mode, ContainerBackend, DirectDockerBackend, SecureBackend,
+};
 pub use config::*;
 pub use docker::*;
 pub use evaluator::*;

@@ -8,13 +8,14 @@ description = "Docker-based challenge container orchestration for Mini-Chain"
 
 [dependencies]
 platform-core = { path = "../core" }
+secure-container-runtime = { path = "../secure-container-runtime" }
 
 # Async
 tokio = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 
-# Docker
+# Docker (for local development only)
 bollard = "0.18"
 
 # Serialization
