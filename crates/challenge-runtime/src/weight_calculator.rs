@@ -1,7 +1,8 @@
 //! Weight Calculator
 //!
 //! Converts challenge leaderboard scores to Bittensor weights.
-//! Handles normalization, edge cases, and commit-reveal protocol.
+//! Pure pass-through of challenge weights - no manipulation.
+//! Unused weight automatically goes to UID 0 (burn address).
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -9,16 +10,20 @@ use tracing::{info, warn};
 /// Maximum weight value for Bittensor (u16 max)
 pub const MAX_WEIGHT: u16 = 65535;
 
+/// UID 0 is the burn address - receives all unused weight
+pub const BURN_UID: u16 = 0;
+
 /// Weight calculator configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeightCalculatorConfig {
-    /// Minimum score to receive any weight
+    /// Minimum score to receive any weight (default: 0.0 = no threshold)
     pub min_score_threshold: f64,
     /// Temperature for softmax (higher = more distributed weights)
     pub temperature: f64,
     /// Whether to use softmax or linear normalization
     pub use_softmax: bool,
-    /// Maximum weight any single UID can receive (as fraction)
+    /// Maximum weight any single UID can receive (as fraction) - DISABLED (set to 1.0)
+    /// NOTE: Weight cap removed - challenges receive pure weights based on emission %
     pub max_weight_fraction: f64,
     /// Mechanism ID for this challenge
     pub mechanism_id: u8,
@@ -29,8 +34,8 @@ impl Default for WeightCalculatorConfig {
         Self {
             min_score_threshold: 0.0,
             temperature: 1.0,
-            use_softmax: true,
-            max_weight_fraction: 0.5, // No single UID gets > 50%
+            use_softmax: false, // Use simple linear normalization
+            max_weight_fraction: 1.0, // No cap - pure weights
             mechanism_id: 0,
         }
     }
@@ -185,52 +190,14 @@ impl WeightCalculator {
             .collect()
     }
 
-    /// Apply max weight cap and redistribute
-    fn apply_weight_cap(&self, mut weights: Vec<(u16, f64, f64)>) -> Vec<(u16, f64, f64)> {
-        let max = self.config.max_weight_fraction;
-
-        // Sort by weight descending
-        weights.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let mut excess = 0.0;
-        let mut capped_count = 0;
-
-        // Cap weights that exceed max
-        for (_, weight, _) in weights.iter_mut() {
-            if *weight > max {
-                excess += *weight - max;
-                *weight = max;
-                capped_count += 1;
-            }
-        }
-
-        if excess > 0.0 && capped_count < weights.len() {
-            // Redistribute excess to non-capped weights
-            let uncapped: Vec<usize> = weights
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, w, _))| *w < max)
-                .map(|(i, _)| i)
-                .collect();
-
-            let extra_per = excess / uncapped.len() as f64;
-            for i in uncapped {
-                weights[i].1 += extra_per;
-                // Re-cap if needed
-                if weights[i].1 > max {
-                    weights[i].1 = max;
-                }
-            }
-        }
-
-        // Normalize to ensure sum = 1.0
-        let sum: f64 = weights.iter().map(|(_, w, _)| w).sum();
-        if sum > 0.0 {
-            for (_, w, _) in weights.iter_mut() {
-                *w /= sum;
-            }
-        }
-
+    /// Apply weight cap (DISABLED - pure pass-through)
+    /// 
+    /// NOTE: Weight caps have been removed for simpler, more transparent weight distribution.
+    /// Challenges receive weights purely based on their emission percentage.
+    /// Unused weight is sent to UID 0 (burn address).
+    fn apply_weight_cap(&self, weights: Vec<(u16, f64, f64)>) -> Vec<(u16, f64, f64)> {
+        // No cap applied - return weights as-is
+        // Normalization already done in normalize_scores()
         weights
     }
 
@@ -385,15 +352,16 @@ mod tests {
     }
 
     #[test]
-    fn test_weight_cap() {
+    fn test_no_weight_cap() {
+        // Weight caps are DISABLED - pure pass-through
         let config = WeightCalculatorConfig {
             use_softmax: false,
-            max_weight_fraction: 0.5, // 50% max
+            max_weight_fraction: 1.0, // No cap (default)
             ..Default::default()
         };
         let calc = WeightCalculator::new(config);
 
-        // One score dominates
+        // One score dominates - should get proportional weight
         let scores = vec![
             MinerScore {
                 uid: 1,
@@ -415,10 +383,13 @@ mod tests {
 
         let result = calc.calculate(&scores, 1);
 
-        // Verify cap is applied - no weight should exceed 50%
-        for w in &result.weights {
-            assert!(w.normalized <= 0.51, "Weight {} exceeds cap", w.normalized);
-        }
+        // With pure pass-through, weights should be proportional to scores
+        // Score 0.9 / 1.0 = 90% weight, Score 0.1 / 1.0 = 10% weight
+        let uid1_weight = result.weights.iter().find(|w| w.uid == 1).unwrap();
+        let uid2_weight = result.weights.iter().find(|w| w.uid == 2).unwrap();
+        
+        assert!(uid1_weight.normalized > 0.85, "UID 1 should get ~90% weight: {}", uid1_weight.normalized);
+        assert!(uid2_weight.normalized < 0.15, "UID 2 should get ~10% weight: {}", uid2_weight.normalized);
 
         // Verify weights still sum to 1.0
         let sum: f64 = result.weights.iter().map(|w| w.normalized).sum();

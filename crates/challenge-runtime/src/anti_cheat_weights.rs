@@ -1,17 +1,20 @@
-//! Anti-Cheat Weight Calculation
+//! Anti-Cheat Weight Calculation (LEGACY/DEPRECATED)
 //!
-//! Calculates weights for agents in a way that prevents validator manipulation:
+//! **NOTE: This module is deprecated. Weight manipulation has been removed from the platform.**
 //!
+//! The platform now uses pure pass-through weights:
+//! - Challenges receive weights based directly on their emission percentage
+//! - No outlier detection, no weight caps, no manipulation
+//! - Unused weight is sent to UID 0 (burn address)
+//!
+//! This module is kept for reference but should not be used in production.
+//!
+//! Original design (no longer active):
 //! 1. **Outlier Detection**: Remove scores that deviate significantly from median
 //! 2. **Consensus Requirement**: Agent must have valid scores from ≥50% of validators
 //! 3. **Top Position Requirement**: Agent must be #1 on ≥50% of validators (by count, not stake)
 //! 4. **Stake-Weighted Average**: Final score uses stake weights (after outlier removal)
 //! 5. **Slashing Detection**: Flag validators whose scores consistently deviate
-//!
-//! This prevents:
-//! - Single high-stake validator from manipulating results
-//! - Colluding minority from pushing bad agents
-//! - Validators from lying about evaluation results
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

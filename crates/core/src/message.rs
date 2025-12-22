@@ -475,7 +475,8 @@ pub struct MechanismWeightConfig {
     pub equal_distribution: bool,
     /// Minimum weight per miner (prevents dust weights)
     pub min_weight_threshold: f64,
-    /// Maximum weight cap per miner (0.0 = no cap, 0.5 = max 50%)
+    /// Maximum weight cap per miner (DEPRECATED - set to 1.0)
+    /// NOTE: Weight caps have been removed. Challenges receive pure weights.
     pub max_weight_cap: f64,
     /// Whether this mechanism is active
     pub active: bool,
@@ -488,7 +489,7 @@ impl MechanismWeightConfig {
             base_burn_rate: 0.0,
             equal_distribution: true,
             min_weight_threshold: 0.0001,
-            max_weight_cap: 0.5,
+            max_weight_cap: 1.0, // No cap - pure weights
             active: true,
         }
     }
