@@ -95,6 +95,12 @@ pub struct NetworkNode {
     /// Bootstrap peers to connect to
     bootstrap_peers: Vec<Multiaddr>,
 
+    /// Bootstrap peer IDs (extracted from multiaddrs)
+    bootstrap_peer_ids: HashSet<PeerId>,
+
+    /// Whether we've ever successfully connected to a bootstrap peer
+    bootstrap_connected: Arc<RwLock<bool>>,
+
     /// Event sender
     event_tx: mpsc::Sender<NetworkEvent>,
 
@@ -138,11 +144,28 @@ impl NetworkNode {
 
         let (event_tx, event_rx) = mpsc::channel(1000);
 
+        // Extract peer IDs from bootstrap multiaddrs
+        let bootstrap_peer_ids: HashSet<PeerId> = config
+            .bootstrap_peers
+            .iter()
+            .filter_map(|addr| {
+                addr.iter().find_map(|p| {
+                    if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
+                        Some(peer_id)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
         Ok(Self {
             swarm,
             local_peer_id,
             peers: Arc::new(RwLock::new(HashSet::new())),
             bootstrap_peers: config.bootstrap_peers.clone(),
+            bootstrap_peer_ids,
+            bootstrap_connected: Arc::new(RwLock::new(false)),
             event_tx,
             event_rx: Some(event_rx),
         })
@@ -193,14 +216,24 @@ impl NetworkNode {
         if self.bootstrap_peers.is_empty() {
             return true; // No bootstrap peers configured
         }
-        // Check if we have any peers connected
-        !self.peers.read().is_empty()
+        // Check if we're connected to at least one bootstrap peer
+        let peers = self.peers.read();
+        for peer in peers.iter() {
+            if self.bootstrap_peer_ids.contains(peer) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Retry connecting to bootstrap peers if not connected
     pub fn retry_bootstrap_if_needed(&mut self) {
+        if self.bootstrap_peers.is_empty() {
+            return; // No bootnode configured
+        }
+        
         if !self.has_bootstrap_connection() {
-            info!("No peers connected, retrying bootstrap peers...");
+            info!("Not connected to bootnode, retrying in 30s...");
             self.dial_bootstrap_peers();
         }
     }
@@ -238,40 +271,8 @@ impl NetworkNode {
 
     /// Process the next swarm event (single step)
     pub async fn process_next_event(&mut self) {
-        match self.swarm.select_next_some().await {
-            SwarmEvent::Behaviour(event) => {
-                self.handle_behaviour_event(event).await;
-            }
-            SwarmEvent::NewListenAddr { address, .. } => {
-                info!("Listening on {}", address);
-            }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                info!("Connected to peer: {}", peer_id);
-                self.peers.write().insert(peer_id);
-                let _ = self
-                    .event_tx
-                    .send(NetworkEvent::PeerConnected(peer_id))
-                    .await;
-            }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                info!("Disconnected from peer: {}", peer_id);
-                self.peers.write().remove(&peer_id);
-                let _ = self
-                    .event_tx
-                    .send(NetworkEvent::PeerDisconnected(peer_id))
-                    .await;
-            }
-            SwarmEvent::IncomingConnection { .. } => {}
-            SwarmEvent::OutgoingConnectionError {
-                peer_id: Some(peer_id),
-                error,
-                ..
-            } => {
-                warn!("Failed to connect to {}: {}", peer_id, error);
-            }
-            SwarmEvent::OutgoingConnectionError { .. } => {}
-            _ => {}
-        }
+        let event = self.swarm.select_next_some().await;
+        self.handle_swarm_event(event).await;
     }
 
     /// Run the event loop (should be spawned as a task)
@@ -302,7 +303,13 @@ impl NetworkNode {
                 info!("Listening on {}", address);
             }
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                info!("Connected to peer: {}", peer_id);
+                let is_bootstrap = self.bootstrap_peer_ids.contains(&peer_id);
+                if is_bootstrap {
+                    info!("Connected to bootnode: {}", peer_id);
+                    *self.bootstrap_connected.write() = true;
+                } else {
+                    info!("Connected to peer: {}", peer_id);
+                }
                 self.peers.write().insert(peer_id);
                 let _ = self
                     .event_tx
@@ -310,7 +317,12 @@ impl NetworkNode {
                     .await;
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                info!("Disconnected from peer: {}", peer_id);
+                let is_bootstrap = self.bootstrap_peer_ids.contains(&peer_id);
+                if is_bootstrap {
+                    info!("Disconnected from bootnode: {}", peer_id);
+                } else {
+                    info!("Disconnected from peer: {}", peer_id);
+                }
                 self.peers.write().remove(&peer_id);
                 let _ = self
                     .event_tx
@@ -323,7 +335,12 @@ impl NetworkNode {
                 error,
                 ..
             } => {
-                warn!("Failed to connect to {}: {}", peer_id, error);
+                let is_bootstrap = self.bootstrap_peer_ids.contains(&peer_id);
+                if is_bootstrap {
+                    warn!("Failed to connect to bootnode {}: {} (will retry in 30s)", peer_id, error);
+                } else {
+                    warn!("Failed to connect to {}: {}", peer_id, error);
+                }
             }
             SwarmEvent::OutgoingConnectionError { .. } => {}
             _ => {}

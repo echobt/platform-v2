@@ -82,6 +82,10 @@ struct Args {
     #[arg(short, long)]
     bootstrap: Option<String>,
 
+    /// Disable bootnode connection (for running as bootnode or isolated testing)
+    #[arg(long)]
+    no_bootnode: bool,
+
     /// Data directory
     #[arg(short, long, default_value = "./data")]
     data_dir: PathBuf,
@@ -920,19 +924,24 @@ async fn main() -> Result<()> {
 
     // Parse bootstrap peers (default to official bootnode if not specified)
     const DEFAULT_BOOTNODE: &str = "/dns4/bootnode.platform.network/tcp/9000/p2p/12D3KooWEpZoR9A1fpMN4QGspuRSa9UYHYvnFda2GWkXXZyYgAkN";
-    let bootstrap_peers: Vec<_> = args
-        .bootstrap
-        .map(|s| {
-            s.split(',')
-                .filter_map(|addr| addr.trim().parse().ok())
-                .collect()
-        })
-        .unwrap_or_else(|| {
-            // Use default bootnode
-            vec![DEFAULT_BOOTNODE
-                .parse()
-                .expect("Invalid default bootnode address")]
-        });
+    let bootstrap_peers: Vec<_> = if args.no_bootnode {
+        info!("Bootnode connection disabled (--no-bootnode)");
+        vec![]
+    } else {
+        args.bootstrap
+            .as_ref()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|addr| addr.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                // Use default bootnode
+                vec![DEFAULT_BOOTNODE
+                    .parse()
+                    .expect("Invalid default bootnode address")]
+            })
+    };
 
     // Create network node with deterministic peer ID derived from hotkey public key
     let node_config = NodeConfig {
