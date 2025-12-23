@@ -1019,6 +1019,10 @@ async fn main() -> Result<()> {
 
     // Spawn network event loop in a separate task
     tokio::spawn(async move {
+        // Bootstrap retry interval - reconnect to bootnode if disconnected
+        let mut bootstrap_retry_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        bootstrap_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 // Process network commands
@@ -1042,6 +1046,10 @@ async fn main() -> Result<()> {
                 }
                 // Process swarm events
                 _ = network.process_next_event() => {}
+                // Retry bootstrap connection every 30s if not connected
+                _ = bootstrap_retry_interval.tick() => {
+                    network.retry_bootstrap_if_needed();
+                }
             }
         }
     });
