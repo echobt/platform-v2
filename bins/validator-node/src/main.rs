@@ -1791,6 +1791,7 @@ async fn main() -> Result<()> {
                     }
                     NetworkEvent::PeerIdentified { peer_id, hotkey, agent_version } => {
                         let peer_str = peer_id.to_string();
+                        let should_validate_stake = protection.config().validate_stake;
                         
                         if let Some(ref hk) = hotkey {
                             // Convert hex hotkey to SS58 for display
@@ -1804,6 +1805,13 @@ async fn main() -> Result<()> {
                             } else {
                                 hk[..16.min(hk.len())].to_string()
                             };
+
+                            // Skip stake validation if disabled (--no-bittensor mode)
+                            if !should_validate_stake {
+                                protection.check_hotkey_connection(hk, &peer_str, None);
+                                info!("Peer identified: {} (hotkey: {}, stake: N/A - local mode)", peer_id, ss58);
+                                continue;
+                            }
 
                             // Validate stake immediately
                             let has_sufficient_stake = {

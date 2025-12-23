@@ -661,7 +661,12 @@ impl ContainerBroker {
                         .and_then(|c| c.image.clone())
                         .unwrap_or_default(),
                     state,
-                    created_at: chrono::Utc::now(), // TODO: parse from info
+                    created_at: info
+                        .created
+                        .as_ref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(chrono::Utc::now),
                     ports: self.get_container_ports(container_id).await,
                     endpoint: None,
                     labels,
