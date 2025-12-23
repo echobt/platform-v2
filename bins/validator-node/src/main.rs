@@ -289,13 +289,53 @@ async fn main() -> Result<()> {
     };
     info!("Using data directory: {:?}", data_dir);
 
-    // Open storage
-    let storage = Storage::open(&data_dir)?;
+    // Helper to detect corruption errors (truncated files, incomplete writes)
+    fn is_corruption_error<E: std::fmt::Display>(err: &E) -> bool {
+        let err_str = err.to_string().to_lowercase();
+        err_str.contains("unexpected end of file")
+            || err_str.contains("io error")
+            || err_str.contains("serialization error")
+            || err_str.contains("corrupt")
+            || err_str.contains("invalid data")
+    }
 
-    // Open distributed database for decentralized storage
+    // Open storage with corruption recovery
+    let storage = match Storage::open(&data_dir) {
+        Ok(s) => s,
+        Err(e) if is_corruption_error(&e) => {
+            warn!("Storage corruption detected: {}. Attempting recovery...", e);
+            // Delete corrupted state file
+            let state_path = data_dir.join("state");
+            if state_path.exists() {
+                warn!("Removing corrupted state directory: {:?}", state_path);
+                std::fs::remove_dir_all(&state_path)?;
+            }
+            // Retry opening
+            Storage::open(&data_dir)?
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Open distributed database with corruption recovery
     let db_path = data_dir.join("distributed-db");
     info!("Opening distributed database at {:?}", db_path);
-    let distributed_db = Arc::new(DistributedDB::open(&db_path, keypair.hotkey())?);
+    let distributed_db = match DistributedDB::open(&db_path, keypair.hotkey()) {
+        Ok(db) => Arc::new(db),
+        Err(e) if is_corruption_error(&e) => {
+            warn!(
+                "Distributed DB corruption detected: {}. Attempting recovery...",
+                e
+            );
+            // Delete corrupted database
+            if db_path.exists() {
+                warn!("Removing corrupted distributed-db: {:?}", db_path);
+                std::fs::remove_dir_all(&db_path)?;
+            }
+            // Retry opening (will create fresh)
+            Arc::new(DistributedDB::open(&db_path, keypair.hotkey())?)
+        }
+        Err(e) => return Err(e.into()),
+    };
     info!(
         "Distributed DB initialized - state root: {}",
         hex::encode(&distributed_db.state_root()[..8])
@@ -314,44 +354,76 @@ async fn main() -> Result<()> {
     let min_stake_tao = args.min_stake;
     let min_stake_rao = (args.min_stake * 1_000_000_000.0) as u64;
 
-    // Load or create chain state
-    let chain_state = if let Some(mut state) = storage.load_state()? {
-        info!("Loaded existing state at block {}", state.block_height);
-        // IMPORTANT: Sync the loaded state's min_stake with CLI argument
-        // This ensures add_validator uses the same threshold as metagraph sync
-        let old_min_stake = state.config.min_stake.0;
-        state.config.min_stake = Stake::new(min_stake_rao);
-        if old_min_stake != min_stake_rao {
-            info!(
-                "Updated state config min_stake: {} -> {} RAO ({} TAO)",
-                old_min_stake, min_stake_rao, min_stake_tao
-            );
+    // Load or create chain state (with corruption recovery)
+    let chain_state = match storage.load_state() {
+        Ok(Some(mut state)) => {
+            info!("Loaded existing state at block {}", state.block_height);
+            // IMPORTANT: Sync the loaded state's min_stake with CLI argument
+            // This ensures add_validator uses the same threshold as metagraph sync
+            let old_min_stake = state.config.min_stake.0;
+            state.config.min_stake = Stake::new(min_stake_rao);
+            if old_min_stake != min_stake_rao {
+                info!(
+                    "Updated state config min_stake: {} -> {} RAO ({} TAO)",
+                    old_min_stake, min_stake_rao, min_stake_tao
+                );
+            }
+            Arc::new(RwLock::new(state))
         }
-        Arc::new(RwLock::new(state))
-    } else {
-        info!("Creating new chain state");
+        Ok(None) => {
+            info!("Creating new chain state");
 
-        // Determine sudo key - use production key by default
-        let sudo_key = if let Some(sudo_hex) = &args.sudo_key {
-            info!("Using custom sudo key");
-            Hotkey::from_hex(sudo_hex).ok_or_else(|| anyhow::anyhow!("Invalid sudo key"))?
-        } else {
-            // Production sudo key: 5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At
-            info!("Using production sudo key: {}", SUDO_KEY_SS58);
-            production_sudo_key()
-        };
+            // Determine sudo key - use production key by default
+            let sudo_key = if let Some(sudo_hex) = &args.sudo_key {
+                info!("Using custom sudo key");
+                Hotkey::from_hex(sudo_hex).ok_or_else(|| anyhow::anyhow!("Invalid sudo key"))?
+            } else {
+                // Production sudo key: 5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At
+                info!("Using production sudo key: {}", SUDO_KEY_SS58);
+                production_sudo_key()
+            };
 
-        // Select network configuration based on Bittensor connection
-        // Use min_stake from CLI argument for consistency
-        let mut config = if args.no_bittensor {
-            NetworkConfig::default()
-        } else {
-            NetworkConfig::production()
-        };
-        config.min_stake = Stake::new(min_stake_rao);
+            // Select network configuration based on Bittensor connection
+            // Use min_stake from CLI argument for consistency
+            let mut config = if args.no_bittensor {
+                NetworkConfig::default()
+            } else {
+                NetworkConfig::production()
+            };
+            config.min_stake = Stake::new(min_stake_rao);
 
-        let state = ChainState::new(sudo_key, config);
-        Arc::new(RwLock::new(state))
+            let state = ChainState::new(sudo_key, config);
+            Arc::new(RwLock::new(state))
+        }
+        Err(e) if is_corruption_error(&e) => {
+            warn!("Chain state corruption detected: {}. Creating fresh state...", e);
+            // Delete corrupted state
+            let state_path = data_dir.join("state");
+            if state_path.exists() {
+                warn!("Removing corrupted state: {:?}", state_path);
+                std::fs::remove_dir_all(&state_path)?;
+            }
+
+            // Create fresh state
+            let sudo_key = if let Some(sudo_hex) = &args.sudo_key {
+                info!("Using custom sudo key");
+                Hotkey::from_hex(sudo_hex).ok_or_else(|| anyhow::anyhow!("Invalid sudo key"))?
+            } else {
+                info!("Using production sudo key: {}", SUDO_KEY_SS58);
+                production_sudo_key()
+            };
+
+            let mut config = if args.no_bittensor {
+                NetworkConfig::default()
+            } else {
+                NetworkConfig::production()
+            };
+            config.min_stake = Stake::new(min_stake_rao);
+
+            let state = ChainState::new(sudo_key, config);
+            Arc::new(RwLock::new(state))
+        }
+        Err(e) => return Err(e.into()),
     };
 
     // Set OWNER_HOTKEY env var for challenge containers
