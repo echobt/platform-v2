@@ -216,13 +216,16 @@ fn init_sentry() -> Option<sentry::ClientInitGuard> {
     Some(guard)
 }
 
+/// Delay before exit on fatal errors - allows Watchtower to update container
+const CRASH_DELAY_SECS: u64 = 30;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize Sentry error monitoring FIRST (before anything else)
     // This ensures we capture all errors from the very start
     let _sentry_guard = init_sentry();
 
-    // Set up panic hook to capture panics in Sentry
+    // Set up panic hook to capture panics in Sentry with delayed exit
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         // Capture panic in Sentry
@@ -231,10 +234,35 @@ async fn main() -> Result<()> {
             sentry::Level::Fatal,
         );
         // Flush Sentry before crashing
-        sentry::Hub::current().client().map(|c| c.flush(Some(std::time::Duration::from_secs(2))));
+        sentry::Hub::current().client().map(|c| c.flush(Some(std::time::Duration::from_secs(5))));
+        
+        // IMPORTANT: Delay exit to allow Watchtower to update container
+        eprintln!("[FATAL] Panic detected. Waiting {}s before exit to allow container updates...", CRASH_DELAY_SECS);
+        std::thread::sleep(std::time::Duration::from_secs(CRASH_DELAY_SECS));
+        
         // Call default panic handler
         default_panic(panic_info);
     }));
+    
+    // Run validator and handle fatal errors with delayed exit
+    if let Err(e) = run_validator().await {
+        error!("Fatal error: {}", e);
+        sentry::capture_message(&format!("FATAL: {}", e), sentry::Level::Fatal);
+        if let Some(client) = sentry::Hub::current().client() {
+            client.flush(Some(std::time::Duration::from_secs(5)));
+        }
+        
+        // IMPORTANT: Delay exit to allow Watchtower to update container
+        error!("Waiting {}s before exit to allow Watchtower updates...", CRASH_DELAY_SECS);
+        tokio::time::sleep(tokio::time::Duration::from_secs(CRASH_DELAY_SECS)).await;
+        
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Main validator logic
+async fn run_validator() -> Result<()> {
 
     // Initialize logging with Sentry integration
     let subscriber = tracing_subscriber::fmt()
