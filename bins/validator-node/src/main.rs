@@ -180,32 +180,61 @@ fn init_sentry() -> Option<sentry::ClientInitGuard> {
     }
 
     let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
+    let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string());
 
     let guard = sentry::init((
         dsn,
         sentry::ClientOptions {
             release: sentry::release_name!(),
             environment: Some(environment.into()),
+            server_name: Some(hostname.into()),
             // SECURITY: Do not send PII (IP addresses, headers, etc.)
             send_default_pii: false,
-            // Only sample 100% of errors, 10% of transactions
+            // Capture 100% of errors and warnings
             sample_rate: 1.0,
             traces_sample_rate: 0.1,
             // Attach stacktraces to all events
             attach_stacktrace: true,
+            // Auto-enable session tracking
+            auto_session_tracking: true,
+            // Capture panic info
             ..Default::default()
         },
     ));
 
-    tracing::info!("Sentry error monitoring initialized");
+    // Start a new session
+    sentry::start_session();
+
+    // Set initial context
+    sentry::configure_scope(|scope| {
+        scope.set_tag("netuid", std::env::var("NETUID").unwrap_or_else(|_| "unknown".to_string()));
+        scope.set_tag("node_type", "validator");
+    });
+
+    eprintln!("[Sentry] Error monitoring initialized (env: {})", 
+        std::env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string()));
     Some(guard)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize Sentry error monitoring (optional - requires SENTRY_DSN env var)
-    // SECURITY: DSN must be provided via environment variable, never hardcode
+    // Initialize Sentry error monitoring FIRST (before anything else)
+    // This ensures we capture all errors from the very start
     let _sentry_guard = init_sentry();
+
+    // Set up panic hook to capture panics in Sentry
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // Capture panic in Sentry
+        sentry::capture_message(
+            &format!("PANIC: {}", panic_info),
+            sentry::Level::Fatal,
+        );
+        // Flush Sentry before crashing
+        sentry::Hub::current().client().map(|c| c.flush(Some(std::time::Duration::from_secs(2))));
+        // Call default panic handler
+        default_panic(panic_info);
+    }));
 
     // Initialize logging with Sentry integration
     let subscriber = tracing_subscriber::fmt()
@@ -221,11 +250,15 @@ async fn main() -> Result<()> {
         subscriber.with(
             sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
                 tracing::Level::ERROR => sentry_tracing::EventFilter::Event,
-                tracing::Level::WARN => sentry_tracing::EventFilter::Breadcrumb,
+                tracing::Level::WARN => sentry_tracing::EventFilter::Event, // Capture warnings as events too
+                tracing::Level::INFO => sentry_tracing::EventFilter::Breadcrumb, // INFO as breadcrumbs for context
                 _ => sentry_tracing::EventFilter::Ignore,
             }),
         );
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
+
+    // Log that Sentry is ready
+    info!("Sentry error monitoring initialized - capturing ERROR and WARN events");
 
     let args = Args::parse();
 
@@ -271,6 +304,17 @@ async fn main() -> Result<()> {
     // SS58 is the standard format used on Bittensor blockchain
     info!("Validator hotkey: {}", keypair.ss58_address());
     debug!("Validator hotkey (hex): {}", keypair.hotkey().to_hex());
+
+    // Set Sentry user context with hotkey for error tracking
+    sentry::configure_scope(|scope| {
+        scope.set_user(Some(sentry::User {
+            id: Some(keypair.ss58_address()),
+            username: Some(keypair.hotkey().to_hex()[..16].to_string()),
+            ..Default::default()
+        }));
+        scope.set_tag("hotkey", keypair.ss58_address());
+        scope.set_tag("hotkey_hex", &keypair.hotkey().to_hex()[..16]);
+    });
 
     // Set VALIDATOR_HOTKEY env var for challenge containers
     // This allows challenge containers to authenticate and sign P2P messages
