@@ -1734,9 +1734,20 @@ async fn run_validator() -> Result<()> {
                                                 network_msg,
                                                 &keypair_for_outbox,
                                             ) {
-                                                if target.is_some() {
-                                                    // TODO: Implement targeted send to specific validator
-                                                    debug!("Targeted P2P send not yet implemented");
+                                                if let Some(ref target_hotkey) = target {
+                                                    // Targeted send: broadcast but log the intended target
+                                                    // All validators see the message for consensus, but the
+                                                    // payload may contain target info for selective processing
+                                                    debug!(
+                                                        "Broadcasting P2P message (target: {})",
+                                                        &target_hotkey[..16.min(target_hotkey.len())]
+                                                    );
+                                                    if let Err(e) = net_cmd_tx_for_outbox
+                                                        .send(NetworkCommand::Broadcast(signed))
+                                                        .await
+                                                    {
+                                                        debug!("Failed to broadcast targeted message: {}", e);
+                                                    }
                                                 } else {
                                                     // Broadcast to all
                                                     if let Err(e) = net_cmd_tx_for_outbox
