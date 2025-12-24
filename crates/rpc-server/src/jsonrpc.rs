@@ -373,9 +373,6 @@ impl RpcHandler {
             // Sudo namespace (for subnet owner actions)
             ["sudo", "submit"] => self.sudo_submit(req.id, req.params),
 
-            // Dev namespace (for local testing)
-            ["dev", "addChallenge"] => self.dev_add_challenge(req.id, req.params),
-
             // Monitor namespace (for csudo monitoring)
             ["monitor", "getChallengeHealth"] => self.monitor_get_challenge_health(req.id),
             ["monitor", "getChallengeLogs"] => self.monitor_get_challenge_logs(req.id, req.params),
@@ -1564,88 +1561,6 @@ impl RpcHandler {
                 "success": true,
                 "message": "Sudo action applied locally and queued for P2P broadcast",
                 "signer": signed.signer().to_hex(),
-            }),
-        )
-    }
-
-    // ==================== Dev Namespace (Local Testing Only) ====================
-
-    /// Add a challenge directly (bypasses P2P consensus - dev only!)
-    fn dev_add_challenge(&self, id: Value, params: Value) -> JsonRpcResponse {
-        use platform_core::{ChallengeContainerConfig, ChallengeId};
-
-        // Parse parameters
-        let name = match self.get_param_str(&params, 0, "name") {
-            Some(n) => n,
-            None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing 'name' parameter"),
-        };
-
-        let docker_image = match self.get_param_str(&params, 1, "dockerImage") {
-            Some(i) => i,
-            None => {
-                return JsonRpcResponse::error(
-                    id,
-                    INVALID_PARAMS,
-                    "Missing 'dockerImage' parameter",
-                )
-            }
-        };
-
-        let mechanism_id = self.get_param_u64(&params, 2, "mechanismId").unwrap_or(1) as u8;
-        let emission_weight = params
-            .get("emissionWeight")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0);
-
-        // Create challenge config
-        let config = ChallengeContainerConfig {
-            challenge_id: ChallengeId::new(),
-            name: name.clone(),
-            docker_image: docker_image.clone(),
-            mechanism_id,
-            emission_weight,
-            timeout_secs: 3600,
-            cpu_cores: 2.0,
-            memory_mb: 4096,
-            gpu_required: false,
-        };
-
-        // Add to chain state directly (dev mode bypass)
-        {
-            let mut chain = self.chain_state.write();
-            let challenge_id = config.challenge_id;
-            chain.challenge_configs.insert(challenge_id, config.clone());
-            info!("DEV: Added challenge '{}' ({})", name, challenge_id);
-        }
-
-        // Register standard routes using the challenge NAME (not UUID)
-        // This allows users to access routes via /challenge/term-bench/config
-        use platform_challenge_sdk::ChallengeRoute;
-        let routes = vec![
-            ChallengeRoute::post("/submit", "Submit an agent"),
-            ChallengeRoute::get("/status/:hash", "Get agent status"),
-            ChallengeRoute::get("/leaderboard", "Get leaderboard"),
-            ChallengeRoute::get("/config", "Get challenge config"),
-            ChallengeRoute::get("/stats", "Get statistics"),
-            ChallengeRoute::get("/health", "Health check"),
-        ];
-        self.register_challenge_routes(&name, routes);
-        info!(
-            "DEV: Registered routes for challenge '{}' at /challenge/{}/",
-            name, name
-        );
-
-        JsonRpcResponse::result(
-            id,
-            json!({
-                "success": true,
-                "challengeId": config.challenge_id.to_string(),
-                "name": name,
-                "dockerImage": docker_image,
-                "mechanismId": mechanism_id,
-                "routesRegistered": 6,
-                "routePath": format!("/challenge/{}/", name),
-                "message": "Challenge added with routes (dev mode - no P2P consensus)"
             }),
         )
     }
