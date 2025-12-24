@@ -56,9 +56,13 @@ impl DockerClient {
         info!("Connected to Docker daemon");
 
         // Try to detect the network from the current container
-        let network_name = Self::detect_validator_network_static(&docker).await
+        let network_name = Self::detect_validator_network_static(&docker)
+            .await
             .unwrap_or_else(|e| {
-                warn!("Could not detect validator network: {}. Using default 'platform-network'", e);
+                warn!(
+                    "Could not detect validator network: {}. Using default 'platform-network'",
+                    e
+                );
                 "platform-network".to_string()
             });
 
@@ -74,10 +78,10 @@ impl DockerClient {
     async fn detect_validator_network_static(docker: &Docker) -> anyhow::Result<String> {
         // Get our container ID
         let container_id = Self::get_container_id_static()?;
-        
+
         // Inspect our container to find its networks
         let inspect = docker.inspect_container(&container_id, None).await?;
-        
+
         let networks = inspect
             .network_settings
             .as_ref()
@@ -87,7 +91,7 @@ impl DockerClient {
         // Find a suitable network (prefer non-default networks)
         // Priority: user-defined bridge > any bridge > host
         let mut best_network: Option<String> = None;
-        
+
         for (name, _settings) in networks {
             // Skip host and none networks
             if name == "host" || name == "none" {
@@ -105,7 +109,8 @@ impl DockerClient {
             break;
         }
 
-        best_network.ok_or_else(|| anyhow::anyhow!("No suitable network found for validator container"))
+        best_network
+            .ok_or_else(|| anyhow::anyhow!("No suitable network found for validator container"))
     }
 
     /// Static version of get_self_container_id for use before Self is constructed
@@ -180,9 +185,9 @@ impl DockerClient {
         }
 
         // 3. Fall back to short hash of hostname (for non-Docker environments)
-        let hostname = std::env::var("HOSTNAME")
-            .unwrap_or_else(|_| format!("{:x}", std::process::id()));
-        
+        let hostname =
+            std::env::var("HOSTNAME").unwrap_or_else(|_| format!("{:x}", std::process::id()));
+
         // Create a short hash of the hostname for uniqueness using std hash
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -425,7 +430,7 @@ impl DockerClient {
             config.name.to_lowercase().replace(' ', "-"),
             validator_suffix
         );
-        
+
         info!(
             container_name = %container_name,
             validator_suffix = %validator_suffix,
@@ -696,12 +701,12 @@ impl DockerClient {
     }
 
     /// Clean up stale task containers created by challenge evaluations
-    /// 
+    ///
     /// This removes containers that match the pattern but excludes:
     /// - Main challenge containers (challenge-*)
     /// - Platform validator containers
     /// - Watchtower containers
-    /// 
+    ///
     /// Parameters:
     /// - `prefix`: Container name prefix to match (e.g., "term-challenge-")
     /// - `max_age_minutes`: Only remove containers older than this (0 = remove all matching)
@@ -713,7 +718,7 @@ impl DockerClient {
         exclude_patterns: &[&str],
     ) -> anyhow::Result<CleanupResult> {
         let mut result = CleanupResult::default();
-        
+
         // List ALL containers (including stopped)
         let options = ListContainersOptions::<String> {
             all: true,
@@ -744,7 +749,9 @@ impl DockerClient {
             // Check exclusion patterns
             let is_excluded = names.iter().any(|name| {
                 let clean_name = name.trim_start_matches('/');
-                exclude_patterns.iter().any(|pattern| clean_name.contains(pattern))
+                exclude_patterns
+                    .iter()
+                    .any(|pattern| clean_name.contains(pattern))
             });
 
             if is_excluded {

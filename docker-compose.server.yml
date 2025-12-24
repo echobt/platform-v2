@@ -1,0 +1,144 @@
+# ============================================================================
+# Platform Server - Central API (Single Source of Truth)
+# ============================================================================
+# Run by subnet owner only at chain.platform.network
+#
+# Usage:
+#   1. Copy .env.server.example to .env.server and configure
+#   2. docker compose -f docker-compose.server.yml up -d
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: platform-postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    
+    networks:
+      - platform-server-network
+
+  # ==========================================================================
+  # Platform Server - Central API
+  # ==========================================================================
+  platform-server:
+    image: ghcr.io/platformnetwork/platform-server:${SERVER_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: platform-server
+    restart: unless-stopped
+    
+    # Enable Watchtower auto-update
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    environment:
+      - PORT=${SERVER_PORT:-8080}
+      - HOST=0.0.0.0
+      - CHALLENGE_ID=${CHALLENGE_ID:-term-bench}
+      - OWNER_HOTKEY=${OWNER_HOTKEY}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
+      - CHALLENGE_URL=${CHALLENGE_URL:-http://term-challenge:8081}
+      - RUST_LOG=${RUST_LOG:-info,platform_server=debug}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+    
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    networks:
+      - platform-server-network
+
+  # ==========================================================================
+  # Term Challenge Container (Always-On)
+  # ==========================================================================
+  term-challenge:
+    image: ghcr.io/platformnetwork/term-challenge-server:latest
+    container_name: term-challenge-server
+    restart: unless-stopped
+    
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    environment:
+      - PLATFORM_URL=http://platform-server:8080
+      - CHALLENGE_ID=${CHALLENGE_ID:-term-bench}
+      - HOST=0.0.0.0
+      - PORT=8081
+      - RUST_LOG=${RUST_LOG:-info,term_challenge=debug}
+    
+    ports:
+      - "${CHALLENGE_PORT:-8081}:8081"
+    
+    depends_on:
+      platform-server:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    networks:
+      - platform-server-network
+
+  # ==========================================================================
+  # Watchtower - Auto-update containers
+  # ==========================================================================
+  watchtower:
+    image: nickfedor/watchtower@sha256:053e7ecba848b77eb5b966d236c2f4f2e1155e05007c9ef52418b4b7e255484b
+    container_name: platform-server-watchtower
+    restart: unless-stopped
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_SCHEDULE=0 */5 * * * *
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_LOG_LEVEL=info
+    
+    networks:
+      - platform-server-network
+
+volumes:
+  postgres-data:
+    driver: local
+
+networks:
+  platform-server-network:
+    driver: bridge

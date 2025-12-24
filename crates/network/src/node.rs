@@ -469,16 +469,15 @@ impl NetworkNode {
                     .await;
             }
             MiniChainBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { peer_id, topic }) => {
-                info!(
-                    "Peer {} subscribed to topic: {}",
-                    peer_id,
-                    topic.as_str()
-                );
+                info!("Peer {} subscribed to topic: {}", peer_id, topic.as_str());
                 // NOTE: Do NOT call add_explicit_peer here!
                 // Explicit peers become "direct peers" that bypass the mesh entirely.
                 // Let gossipsub handle mesh formation automatically via GRAFT/PRUNE.
             }
-            MiniChainBehaviourEvent::Gossipsub(gossipsub::Event::Unsubscribed { peer_id, topic }) => {
+            MiniChainBehaviourEvent::Gossipsub(gossipsub::Event::Unsubscribed {
+                peer_id,
+                topic,
+            }) => {
                 info!(
                     "Peer {} unsubscribed from topic: {}",
                     peer_id,
@@ -556,7 +555,7 @@ impl NetworkNode {
                 if is_platform_validator {
                     let mesh_peers = self.swarm.behaviour().mesh_peer_count();
                     let topic_peers = self.swarm.behaviour().topic_peer_count();
-                    
+
                     debug!(
                         "New platform validator {}: mesh has {} peers, topic has {} peers",
                         peer_id, mesh_peers, topic_peers

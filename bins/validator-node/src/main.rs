@@ -306,7 +306,10 @@ async fn run_validator() -> Result<()> {
         error!("SCHEMA INTEGRITY CHECK FAILED!\n{}", e);
         return Err(anyhow::anyhow!("Schema integrity check failed: {}", e));
     }
-    info!("Schema integrity verified for version {}", platform_core::CURRENT_STATE_VERSION);
+    info!(
+        "Schema integrity verified for version {}",
+        platform_core::CURRENT_STATE_VERSION
+    );
 
     info!("Starting validator node...");
 
@@ -1652,14 +1655,20 @@ async fn run_validator() -> Result<()> {
 
                 // Get all challenge endpoints (these have the real container hostnames with suffixes)
                 let endpoints: Vec<(String, String)> = {
-                    endpoints_for_outbox.read().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                    endpoints_for_outbox
+                        .read()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
                 };
 
                 if endpoints.is_empty() {
                     // Log at info level occasionally to confirm task is running
-                    static EMPTY_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    static EMPTY_COUNT: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
                     let count = EMPTY_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if count % 12 == 0 { // Log every minute (12 * 5s = 60s)
+                    if count % 12 == 0 {
+                        // Log every minute (12 * 5s = 60s)
                         info!("P2P outbox poll: no challenge endpoints registered yet (poll #{count})");
                     }
                     continue;
@@ -1668,13 +1677,17 @@ async fn run_validator() -> Result<()> {
                 // Also get configs for challenge metadata
                 let configs: std::collections::HashMap<String, ChallengeContainerConfig> = {
                     let state = state_for_outbox.read();
-                    state.challenge_configs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+                    state
+                        .challenge_configs
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.clone()))
+                        .collect()
                 };
 
                 for (challenge_id, endpoint) in &endpoints {
                     // Use the real endpoint (includes suffix like challenge-term-challenge-4133b3431b1c)
                     let outbox_url = format!("{}/p2p/outbox", endpoint);
-                    
+
                     // Get config for this challenge
                     let config = match configs.get(challenge_id) {
                         Some(c) => c.clone(),
@@ -1691,19 +1704,27 @@ async fn run_validator() -> Result<()> {
                                     outbox.get("messages").and_then(|m| m.as_array())
                                 {
                                     if !messages.is_empty() {
-                                        info!("Found {} messages in outbox for challenge {}", messages.len(), challenge_id);
+                                        info!(
+                                            "Found {} messages in outbox for challenge {}",
+                                            messages.len(),
+                                            challenge_id
+                                        );
                                     }
                                     for msg_value in messages {
                                         // Parse the outbox message
                                         let message = match msg_value.get("message") {
                                             Some(m) => m,
                                             None => {
-                                                warn!("Outbox message missing 'message' field: {:?}", msg_value);
+                                                warn!(
+                                                    "Outbox message missing 'message' field: {:?}",
+                                                    msg_value
+                                                );
                                                 continue;
                                             }
                                         };
-                                        let target = msg_value.get("target").and_then(|t| t.as_str());
-                                        
+                                        let target =
+                                            msg_value.get("target").and_then(|t| t.as_str());
+
                                         // Check if this is a DecryptApiKeyRequest - handle locally
                                         if let Ok(platform_challenge_sdk::ChallengeP2PMessage::DecryptApiKeyRequest(req)) =
                                             serde_json::from_value::<platform_challenge_sdk::ChallengeP2PMessage>(message.clone()) {
@@ -1751,15 +1772,15 @@ async fn run_validator() -> Result<()> {
                                                     continue; // Don't broadcast this message
                                             }
 
-                                            // Create ChallengeNetworkMessage to broadcast
-                                            let challenge_msg = ChallengeNetworkMessage {
-                                                challenge_id: config.name.clone(),
-                                                message_type: ChallengeMessageType::Custom(
-                                                    "p2p_bridge".to_string(),
-                                                ),
-                                                payload: serde_json::to_vec(message)
-                                                    .unwrap_or_default(),
-                                            };
+                                        // Create ChallengeNetworkMessage to broadcast
+                                        let challenge_msg = ChallengeNetworkMessage {
+                                            challenge_id: config.name.clone(),
+                                            message_type: ChallengeMessageType::Custom(
+                                                "p2p_bridge".to_string(),
+                                            ),
+                                            payload: serde_json::to_vec(message)
+                                                .unwrap_or_default(),
+                                        };
 
                                         let network_msg =
                                             NetworkMessage::ChallengeMessage(challenge_msg);
@@ -1780,7 +1801,10 @@ async fn run_validator() -> Result<()> {
                                                         );
                                                     }
                                                     Err(e) => {
-                                                        error!("Failed to send broadcast command: {}", e);
+                                                        error!(
+                                                            "Failed to send broadcast command: {}",
+                                                            e
+                                                        );
                                                     }
                                                 }
                                             }
@@ -1801,7 +1825,11 @@ async fn run_validator() -> Result<()> {
                             }
                         }
                         Ok(resp) => {
-                            debug!("Outbox poll failed for {}: HTTP {}", challenge_id, resp.status());
+                            debug!(
+                                "Outbox poll failed for {}: HTTP {}",
+                                challenge_id,
+                                resp.status()
+                            );
                         }
                         Err(e) => {
                             debug!("Outbox poll error for {}: {}", challenge_id, e);
@@ -2552,7 +2580,7 @@ async fn run_validator() -> Result<()> {
                     // Periodic sync of validators to challenge containers
                     if last_challenge_validator_sync.elapsed() >= challenge_validator_sync_interval {
                         last_challenge_validator_sync = std::time::Instant::now();
-                        
+
                         // Get current validators from chain state
                         let validators: Vec<_> = chain_state
                             .read()
@@ -3000,7 +3028,9 @@ async fn handle_message(
                 {
                     let mut state = chain_state.write();
                     if !state.challenge_configs.contains_key(&config.challenge_id) {
-                        state.challenge_configs.insert(config.challenge_id, config.clone());
+                        state
+                            .challenge_configs
+                            .insert(config.challenge_id, config.clone());
                         info!(
                             "Added challenge '{}' ({}) to ChainState from P2P Proposal",
                             config.name, config.challenge_id
@@ -3161,7 +3191,7 @@ async fn handle_message(
             let msg_payload = challenge_msg.payload.clone();
             let kp = keypair.unwrap().clone();
             let sessions = container_auth_sessions.unwrap().clone();
-            
+
             // Look up the correct endpoint from the stored endpoints map
             let base_url = if let Some(endpoints) = challenge_endpoints {
                 let eps = endpoints.read();
@@ -3172,7 +3202,7 @@ async fn handle_message(
             } else {
                 None
             };
-            
+
             let base_url = match base_url {
                 Some(url) => url,
                 None => {
@@ -3245,7 +3275,10 @@ async fn handle_message(
                             );
                             Some(p2p_msg)
                         } else {
-                            warn!("Failed to parse Custom({}) payload as ChallengeP2PMessage", custom_type);
+                            warn!(
+                                "Failed to parse Custom({}) payload as ChallengeP2PMessage",
+                                custom_type
+                            );
                             None
                         }
                     }
@@ -3283,10 +3316,17 @@ async fn handle_message(
                             warn!("Auth token expired for challenge {}, will re-authenticate on next message", challenge_id);
                         }
                         Ok(resp) => {
-                            debug!("Challenge {} container returned {}", challenge_id, resp.status());
+                            debug!(
+                                "Challenge {} container returned {}",
+                                challenge_id,
+                                resp.status()
+                            );
                         }
                         Err(e) => {
-                            debug!("Failed to forward to challenge {} container: {}", challenge_id, e);
+                            debug!(
+                                "Failed to forward to challenge {} container: {}",
+                                challenge_id, e
+                            );
                         }
                     }
                 }
@@ -3343,7 +3383,7 @@ async fn handle_message(
                     hex::encode(hasher.finalize())
                 });
                 let validator_hotkey = signer.to_hex();
-                
+
                 // Look up the correct endpoint from the stored endpoints map
                 let base_url = if let Some(endpoints) = challenge_endpoints {
                     let eps = endpoints.read();
@@ -3355,7 +3395,7 @@ async fn handle_message(
                 } else {
                     None
                 };
-                
+
                 let base_url = match base_url {
                     Some(url) => url,
                     None => {
