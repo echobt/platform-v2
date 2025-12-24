@@ -299,6 +299,15 @@ async fn run_validator() -> Result<()> {
 
     let args = Args::parse();
 
+    // CRITICAL: Verify schema integrity before any state operations
+    // This prevents loading corrupted state or saving incompatible data
+    info!("Verifying schema integrity...");
+    if let Err(e) = platform_core::verify_schema_integrity() {
+        error!("SCHEMA INTEGRITY CHECK FAILED!\n{}", e);
+        return Err(anyhow::anyhow!("Schema integrity check failed: {}", e));
+    }
+    info!("Schema integrity verified for version {}", platform_core::CURRENT_STATE_VERSION);
+
     info!("Starting validator node...");
 
     // Parse required secret key (hex or mnemonic)
