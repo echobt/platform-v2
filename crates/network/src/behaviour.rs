@@ -52,6 +52,7 @@ impl MiniChainBehaviour {
             .gossip_lazy(6) // Peers to gossip to outside mesh
             .gossip_factor(0.25) // Fraction of peers to gossip to
             .do_px() // Enable peer exchange on PRUNE for discovery
+            .flood_publish(true) // Send to ALL peers when mesh is low/empty
             .message_id_fn(|msg| {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hash::hash(&msg.data, &mut hasher);
