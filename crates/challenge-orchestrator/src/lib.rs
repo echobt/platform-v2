@@ -30,7 +30,7 @@ pub use backend::{
     SecureBackend, DEFAULT_BROKER_SOCKET,
 };
 pub use config::*;
-pub use docker::*;
+pub use docker::{CleanupResult, DockerClient};
 pub use evaluator::*;
 pub use health::*;
 pub use lifecycle::*;
@@ -246,6 +246,35 @@ impl ChallengeOrchestrator {
         }
 
         Ok(())
+    }
+
+    /// Clean up stale task containers from challenge evaluations
+    /// 
+    /// This removes containers that match the pattern but excludes:
+    /// - Main challenge containers (challenge-*)
+    /// - Platform validator/watchtower containers
+    ///
+    /// Called periodically to prevent Docker from accumulating orphaned containers.
+    pub async fn cleanup_stale_task_containers(&self) -> anyhow::Result<CleanupResult> {
+        // Clean up term-challenge task containers older than 30 minutes
+        // Exclude:
+        // - challenge-* (main challenge containers managed by orchestrator)
+        // - platform-* (validator, watchtower)
+        let result = self
+            .docker
+            .cleanup_stale_containers(
+                "term-challenge-",
+                30, // 30 minutes old
+                &["challenge-term-challenge", "platform-"],
+            )
+            .await?;
+
+        Ok(result)
+    }
+
+    /// Get the Docker client for direct operations
+    pub fn docker(&self) -> &DockerClient {
+        &self.docker
     }
 }
 

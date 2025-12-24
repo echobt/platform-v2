@@ -2562,6 +2562,23 @@ async fn run_validator() -> Result<()> {
 
                     // Cleanup stale peer states
                     db_sync_for_loop.cleanup_stale_peers(std::time::Duration::from_secs(120));
+
+                    // Periodic cleanup of stale task containers (every ~10 blocks/seconds)
+                    // These are containers created by term-challenge during evaluation
+                    if let Some(orch) = challenge_orchestrator.as_ref() {
+                        match orch.cleanup_stale_task_containers().await {
+                            Ok(result) if result.removed > 0 => {
+                                info!(
+                                    "Container cleanup: removed {} stale containers",
+                                    result.removed
+                                );
+                            }
+                            Err(e) => {
+                                debug!("Container cleanup error: {}", e);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
 

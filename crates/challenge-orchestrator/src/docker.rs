@@ -550,6 +550,111 @@ impl DockerClient {
 
         Ok(output)
     }
+
+    /// Clean up stale task containers created by challenge evaluations
+    /// 
+    /// This removes containers that match the pattern but excludes:
+    /// - Main challenge containers (challenge-*)
+    /// - Platform validator containers
+    /// - Watchtower containers
+    /// 
+    /// Parameters:
+    /// - `prefix`: Container name prefix to match (e.g., "term-challenge-")
+    /// - `max_age_minutes`: Only remove containers older than this (0 = remove all matching)
+    /// - `exclude_patterns`: Container names containing these patterns will be kept
+    pub async fn cleanup_stale_containers(
+        &self,
+        prefix: &str,
+        max_age_minutes: u64,
+        exclude_patterns: &[&str],
+    ) -> anyhow::Result<CleanupResult> {
+        let mut result = CleanupResult::default();
+        
+        // List ALL containers (including stopped)
+        let options = ListContainersOptions::<String> {
+            all: true,
+            ..Default::default()
+        };
+
+        let containers = self.docker.list_containers(Some(options)).await?;
+        let now = chrono::Utc::now().timestamp();
+        let max_age_secs = (max_age_minutes * 60) as i64;
+
+        for container in containers {
+            let names = container.names.unwrap_or_default();
+            let container_id = match container.id.as_ref() {
+                Some(id) => id.clone(),
+                None => continue,
+            };
+
+            // Check if container name matches prefix
+            let matches_prefix = names.iter().any(|name| {
+                let clean_name = name.trim_start_matches('/');
+                clean_name.starts_with(prefix)
+            });
+
+            if !matches_prefix {
+                continue;
+            }
+
+            // Check exclusion patterns
+            let is_excluded = names.iter().any(|name| {
+                let clean_name = name.trim_start_matches('/');
+                exclude_patterns.iter().any(|pattern| clean_name.contains(pattern))
+            });
+
+            if is_excluded {
+                debug!(container = ?names, "Skipping excluded container");
+                continue;
+            }
+
+            // Check age if max_age_minutes > 0
+            if max_age_minutes > 0 {
+                let created = container.created.unwrap_or(0);
+                let age_secs = now - created;
+                if age_secs < max_age_secs {
+                    debug!(container = ?names, age_secs, "Container too young, skipping");
+                    continue;
+                }
+            }
+
+            // Remove the container
+            result.total_found += 1;
+            match self.remove_container(&container_id).await {
+                Ok(_) => {
+                    info!(container = ?names, "Removed stale container");
+                    result.removed += 1;
+                }
+                Err(e) => {
+                    warn!(container = ?names, error = %e, "Failed to remove container");
+                    result.errors.push(format!("{:?}: {}", names, e));
+                }
+            }
+        }
+
+        if result.removed > 0 {
+            info!(
+                "Cleanup complete: removed {}/{} stale containers",
+                result.removed, result.total_found
+            );
+        }
+
+        Ok(result)
+    }
+}
+
+/// Result of container cleanup operation
+#[derive(Debug, Default)]
+pub struct CleanupResult {
+    pub total_found: usize,
+    pub removed: usize,
+    pub errors: Vec<String>,
+}
+
+impl CleanupResult {
+    pub fn success(&self) -> bool {
+        self.errors.is_empty()
+    }
 }
 
 #[cfg(test)]
