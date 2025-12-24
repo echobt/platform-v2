@@ -302,17 +302,17 @@ impl NetworkNode {
             }
         }
 
-        // If we have peers in topic but mesh is still empty, add them explicitly
-        // This happens when GRAFT messages fail to form the mesh
+        // If we have peers in topic but mesh is still empty, refresh subscription
+        // This will trigger GRAFT messages in the next heartbeat
+        // NOTE: Do NOT use add_explicit_peer here - it makes peers "direct peers"
+        // that bypass the mesh entirely and break gossip propagation!
         if topic_peers > 0 && mesh_peers == 0 {
             info!(
-                "Mesh repair: {} peers in topic but mesh empty, adding peers explicitly",
+                "Mesh repair: {} peers in topic but mesh empty, refreshing subscription to trigger GRAFT",
                 topic_peers
             );
-            // Get list of connected peers and add them
-            let peers_to_add: Vec<PeerId> = self.peers.read().iter().cloned().collect();
-            for peer_id in peers_to_add {
-                self.swarm.behaviour_mut().add_peer_to_mesh(&peer_id);
+            if let Err(e) = self.swarm.behaviour_mut().refresh_subscription() {
+                warn!("Failed to refresh subscription: {}", e);
             }
         }
     }
