@@ -32,8 +32,12 @@ async fn test_consensus_with_8_validators() {
     // Consensus threshold for 8 validators at 50% = 4
     assert_eq!(state.consensus_threshold(), 4);
 
-    // Create consensus state
-    let consensus_state = ConsensusState::new(ConsensusConfig::default());
+    // Create consensus state with 50% threshold to match ChainState behavior
+    let config = ConsensusConfig {
+        threshold: 0.5, // 50% to match ChainState.consensus_threshold()
+        ..Default::default()
+    };
+    let consensus_state = ConsensusState::new(config);
     consensus_state.set_validator_count(8);
 
     // Create a proposal

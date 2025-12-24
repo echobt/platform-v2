@@ -156,11 +156,12 @@ mod tests {
     fn test_consensus_threshold() {
         let state = ConsensusState::new(ConsensusConfig::default());
 
-        // Test with 8 validators (50% = 4)
+        // Default threshold is 33% (0.33)
+        // Test with 8 validators: ceil(8 * 0.33) = ceil(2.64) = 3
         state.set_validator_count(8);
-        assert_eq!(state.threshold(), 4);
+        assert_eq!(state.threshold(), 3);
 
-        // Test with 4 validators (50% = 2)
+        // Test with 4 validators: ceil(4 * 0.33) = ceil(1.32) = 2
         state.set_validator_count(4);
         assert_eq!(state.threshold(), 2);
     }
