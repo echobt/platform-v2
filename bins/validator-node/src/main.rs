@@ -2868,6 +2868,19 @@ async fn handle_message(
                 ref config,
             }) = proposal.action
             {
+                // CRITICAL: Add challenge to ChainState so it's recognized when agents arrive
+                // This was missing before - P2P proposals started containers but didn't register the challenge
+                {
+                    let mut state = chain_state.write();
+                    if !state.challenge_configs.contains_key(&config.challenge_id) {
+                        state.challenge_configs.insert(config.challenge_id, config.clone());
+                        info!(
+                            "Added challenge '{}' ({}) to ChainState from P2P Proposal",
+                            config.name, config.challenge_id
+                        );
+                    }
+                }
+
                 // Auto-register routes
                 if let Some(routes_map) = challenge_routes {
                     use platform_challenge_sdk::ChallengeRoute;
