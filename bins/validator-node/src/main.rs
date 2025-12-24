@@ -1656,7 +1656,12 @@ async fn run_validator() -> Result<()> {
                 };
 
                 if endpoints.is_empty() {
-                    debug!("P2P outbox poll: no challenge endpoints registered yet");
+                    // Log at info level occasionally to confirm task is running
+                    static EMPTY_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    let count = EMPTY_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if count % 12 == 0 { // Log every minute (12 * 5s = 60s)
+                        info!("P2P outbox poll: no challenge endpoints registered yet (poll #{count})");
+                    }
                     continue;
                 }
 
@@ -1666,13 +1671,12 @@ async fn run_validator() -> Result<()> {
                     state.challenge_configs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
                 };
 
-                for (challenge_id, endpoint) in endpoints {
+                for (challenge_id, endpoint) in &endpoints {
                     // Use the real endpoint (includes suffix like challenge-term-challenge-4133b3431b1c)
                     let outbox_url = format!("{}/p2p/outbox", endpoint);
-                    debug!("Polling outbox: {} -> {}", challenge_id, outbox_url);
                     
                     // Get config for this challenge
-                    let config = match configs.get(&challenge_id) {
+                    let config = match configs.get(challenge_id) {
                         Some(c) => c.clone(),
                         None => {
                             debug!("No config found for challenge {}, skipping", challenge_id);
