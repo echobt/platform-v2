@@ -9515,6 +9515,7 @@ dependencies = [
  "platform-subnet-manager",
  "rand 0.8.5",
  "reqwest 0.12.25",
+ "secure-container-runtime",
  "sentry",
  "sentry-tracing",
  "serde",

@@ -20,6 +20,7 @@ platform-rpc = { path = "../../crates/rpc-server" }
 platform-subnet-manager = { path = "../../crates/subnet-manager" }
 challenge-orchestrator = { path = "../../crates/challenge-orchestrator" }
 distributed-db = { path = "../../crates/distributed-db" }
+secure-container-runtime = { path = "../../crates/secure-container-runtime" }
 
 # Challenges are loaded dynamically from ChainState (Docker containers)
 # No hardcoded challenge dependencies

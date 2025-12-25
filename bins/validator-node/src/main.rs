@@ -25,6 +25,7 @@ use platform_network::{
 use platform_rpc::{OrchestratorCommand, RpcConfig, RpcServer};
 use platform_storage::Storage;
 use platform_subnet_manager::BanList;
+use secure_container_runtime::{ContainerBroker, SecurityPolicy, WsConfig};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -164,6 +165,17 @@ struct Args {
     /// Health check interval for challenge containers (seconds)
     #[arg(long, default_value = "30")]
     health_check_interval: u64,
+
+    // === Container Broker Options ===
+    /// WebSocket port for container broker (allows challenges to spawn containers securely)
+    /// Challenge containers connect via ws://platform-validator:8090
+    #[arg(long, env = "BROKER_WS_PORT", default_value = "8090")]
+    broker_port: u16,
+
+    /// JWT secret for container broker authentication
+    /// If not set, broker runs without auth (development mode only)
+    #[arg(long, env = "BROKER_JWT_SECRET")]
+    broker_jwt_secret: Option<String>,
 }
 
 /// Initialize Sentry error monitoring
@@ -1310,6 +1322,64 @@ async fn run_validator() -> Result<()> {
     // Note: WASM evaluation loop disabled - Docker challenges handle their own evaluation
     // The ChallengeRuntime is kept for epoch management and weight collection only
     // tokio::spawn(async move { runtime_for_eval.run_evaluation_loop().await; });
+
+    // ==========================================================================
+    // Container Broker for secure container management
+    // ==========================================================================
+    // Challenges connect via WebSocket to spawn sandbox containers without direct Docker access.
+    // This is safer than sharing the Docker socket with challenge containers.
+
+    let broker_jwt_secret = args.broker_jwt_secret.clone();
+    let broker_port = args.broker_port;
+
+    if args.docker_challenges && broker_port > 0 {
+        info!("Starting container broker on port {}...", broker_port);
+
+        // Use development policy if no JWT secret (allows local testing)
+        let policy = if broker_jwt_secret.is_some() {
+            info!("Container broker: Using strict security policy with JWT auth");
+            SecurityPolicy::strict()
+        } else {
+            warn!("Container broker: No JWT secret set - using development policy");
+            warn!("  Set BROKER_JWT_SECRET for production deployments");
+            SecurityPolicy::development()
+        };
+
+        match ContainerBroker::with_policy(policy).await {
+            Ok(broker) => {
+                let broker = Arc::new(broker);
+                let ws_config = WsConfig {
+                    bind_addr: format!("0.0.0.0:{}", broker_port),
+                    jwt_secret: broker_jwt_secret.clone(),
+                    allowed_challenges: vec![], // All challenges allowed
+                    max_connections_per_challenge: 10,
+                };
+
+                // Start WebSocket server in background
+                let broker_for_ws = broker.clone();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        secure_container_runtime::run_ws_server(broker_for_ws, ws_config).await
+                    {
+                        error!("Container broker WebSocket server error: {}", e);
+                    }
+                });
+
+                info!(
+                    "Container broker WebSocket server started on ws://0.0.0.0:{}",
+                    broker_port
+                );
+                info!(
+                    "  Challenges can connect via: ws://platform-validator:{}",
+                    broker_port
+                );
+            }
+            Err(e) => {
+                warn!("Failed to start container broker: {}", e);
+                warn!("  Challenges will use direct Docker (if available)");
+            }
+        }
+    }
 
     // Initialize Challenge Orchestrator for Docker containers (if enabled)
     let challenge_orchestrator: Option<Arc<ChallengeOrchestrator>> = if args.docker_challenges {
