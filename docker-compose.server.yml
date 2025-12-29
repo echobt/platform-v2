@@ -16,6 +16,8 @@ services:
     container_name: platform-server
     restart: unless-stopped
     entrypoint: ["platform", "server"]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     command:
       - --port
       - "8080"
@@ -36,6 +38,24 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  # ==========================================================================
+  # Watchtower - Auto-update platform-server container
+  # ==========================================================================
+  watchtower:
+    image: nickfedor/watchtower@sha256:053e7ecba848b77eb5b966d236c2f4f2e1155e05007c9ef52418b4b7e255484b
+    container_name: platform-server-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_SCHEDULE=0 */5 * * * *
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_LOG_LEVEL=info
+    networks:
+      - platform-challenges
 
 networks:
   platform-challenges:
