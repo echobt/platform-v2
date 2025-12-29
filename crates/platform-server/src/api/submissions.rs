@@ -9,7 +9,13 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use sp_core::crypto::Ss58Codec;
 use std::sync::Arc;
+
+/// Validate that a string is a valid SS58 hotkey address
+fn is_valid_ss58_hotkey(hotkey: &str) -> bool {
+    sp_core::crypto::AccountId32::from_ss58check(hotkey).is_ok()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ListSubmissionsQuery {
@@ -63,6 +69,26 @@ pub async fn submit_agent(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SubmitAgentRequest>,
 ) -> Result<Json<SubmitAgentResponse>, (StatusCode, Json<SubmitAgentResponse>)> {
+    // Validate miner_hotkey is a valid SS58 address
+    if !is_valid_ss58_hotkey(&req.miner_hotkey) {
+        tracing::warn!(
+            "Invalid miner_hotkey format: {} (expected SS58 address starting with '5')",
+            &req.miner_hotkey[..32.min(req.miner_hotkey.len())]
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(SubmitAgentResponse {
+                success: false,
+                submission_id: None,
+                agent_hash: None,
+                error: Some(format!(
+                    "Invalid miner_hotkey: must be a valid SS58 address (e.g., '5GrwvaEF...'). Received: {}",
+                    &req.miner_hotkey[..32.min(req.miner_hotkey.len())]
+                )),
+            }),
+        ));
+    }
+
     let epoch = queries::get_current_epoch(&state.db).await.unwrap_or(0);
 
     // Rate limiting: 0.33 submissions per epoch (1 every 3 epochs)
