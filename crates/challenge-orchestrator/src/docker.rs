@@ -526,7 +526,13 @@ impl DockerClient {
         // Pass through important environment variables from image defaults
         env.push("TASKS_DIR=/app/data/tasks".to_string());
         env.push("DATA_DIR=/data".to_string());
-        env.push("RUST_LOG=info,term_challenge=debug".to_string());
+        // Set RUST_LOG based on VERBOSE env var
+        let rust_log = if std::env::var("VERBOSE").is_ok() {
+            "debug,hyper=info,h2=info,tower=info,tokio_postgres=debug".to_string()
+        } else {
+            "info,term_challenge=debug".to_string()
+        };
+        env.push(format!("RUST_LOG={}", rust_log));
         // Force challenge server to listen on port 8080 (orchestrator expects this)
         env.push("PORT=8080".to_string());
         // For Docker-in-Docker: tasks are at /host-tasks on host (we mount below)
