@@ -182,7 +182,27 @@ async fn main() -> anyhow::Result<()> {
             get(data_api::get_results),
         )
         .route("/api/v1/data/snapshot", get(data_api::get_snapshot))
-        // === SUBMISSIONS & EVALUATIONS ===
+        // === BRIDGE TO TERM-CHALLENGE (new submission flow) ===
+        .route("/api/v1/submit", post(api::bridge::bridge_submit))
+        .route(
+            "/api/v1/challenge/leaderboard",
+            get(api::bridge::bridge_leaderboard),
+        )
+        .route("/api/v1/challenge/status", get(api::bridge::bridge_status))
+        .route("/api/v1/my/agents", post(api::bridge::bridge_my_agents))
+        .route(
+            "/api/v1/my/agents/:hash/source",
+            post(api::bridge::bridge_my_agent_source),
+        )
+        .route(
+            "/api/v1/validator/claim_job",
+            post(api::bridge::bridge_validator_claim),
+        )
+        .route(
+            "/api/v1/validator/complete_job",
+            post(api::bridge::bridge_validator_complete),
+        )
+        // === SUBMISSIONS & EVALUATIONS (deprecated - use /api/v1/submit) ===
         .route(
             "/api/v1/submissions",
             get(api::submissions::list_submissions),
