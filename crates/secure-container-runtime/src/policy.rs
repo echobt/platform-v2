@@ -56,7 +56,9 @@ impl Default for SecurityPolicy {
         forbidden.insert("/dev".to_string());
 
         Self {
-            allowed_image_prefixes: vec!["ghcr.io/platformnetwork/".to_string()],
+            // Empty = allow all images (challenges can use any public image)
+            // For strict mode, populate this with allowed prefixes
+            allowed_image_prefixes: vec![],
             max_memory_bytes: 8 * 1024 * 1024 * 1024, // 8GB
             max_cpu_cores: 4.0,
             max_pids: 512,
@@ -72,21 +74,33 @@ impl Default for SecurityPolicy {
 }
 
 impl SecurityPolicy {
-    /// Create a strict policy for production
+    /// Create a strict policy for production with image whitelist
     pub fn strict() -> Self {
-        Self::default()
+        let mut policy = Self::default();
+        // Only allow platform images in strict mode
+        policy.allowed_image_prefixes = vec!["ghcr.io/platformnetwork/".to_string()];
+        policy
     }
 
     /// Create a more permissive policy for development
     pub fn development() -> Self {
         let mut policy = Self::default();
         policy
-            .allowed_image_prefixes
-            .push("localhost:5000/".to_string());
-        policy
             .allowed_mount_prefixes
             .push("/workspace/".to_string());
         policy
+    }
+
+    /// Allow all images (no whitelist check)
+    pub fn allow_all_images(mut self) -> Self {
+        self.allowed_image_prefixes.clear();
+        self
+    }
+
+    /// Add allowed image prefix
+    pub fn with_image_prefix(mut self, prefix: &str) -> Self {
+        self.allowed_image_prefixes.push(prefix.to_string());
+        self
     }
 
     /// Validate a container configuration against policy
@@ -120,7 +134,13 @@ impl SecurityPolicy {
     }
 
     /// Validate image is from allowed registry
+    /// If allowed_image_prefixes is empty, all images are allowed
     pub fn validate_image(&self, image: &str) -> Result<(), ContainerError> {
+        // Empty whitelist = allow all images
+        if self.allowed_image_prefixes.is_empty() {
+            return Ok(());
+        }
+
         let image_lower = image.to_lowercase();
 
         for prefix in &self.allowed_image_prefixes {
