@@ -30,7 +30,7 @@ mod websocket;
 use crate::observability::init_sentry;
 use crate::orchestration::ChallengeManager;
 use crate::state::AppState;
-use crate::websocket::handler::ws_handler;
+use crate::websocket::{challenge_ws_handler, ws_handler};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -176,6 +176,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_check))
         // WebSocket for validators
         .route("/ws", get(ws_handler))
+        // WebSocket for challenge containers (to send targeted notifications to validators)
+        .route("/ws/challenge", get(challenge_ws_handler))
         // === CONTROL PLANE API ===
         .route("/api/v1/auth", post(api::auth::authenticate))
         .route("/api/v1/validators", get(api::validators::list_validators))
