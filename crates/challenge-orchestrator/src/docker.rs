@@ -482,6 +482,23 @@ impl DockerClient {
             debug!("Volume creation result for {}: {:?}", cache_volume_name, e);
         }
 
+        // Create named volumes for Docker-in-Docker task sharing
+        // These volumes are shared between challenge containers and agent containers
+        let tasks_volume = "term-challenge-tasks";
+        let dind_cache_volume = "term-challenge-cache";
+        let evals_volume = "term-challenge-evals";
+
+        for vol_name in [tasks_volume, dind_cache_volume, evals_volume] {
+            let vol_opts = bollard::volume::CreateVolumeOptions {
+                name: vol_name,
+                driver: "local",
+                ..Default::default()
+            };
+            if let Err(e) = self.docker.create_volume(vol_opts).await {
+                debug!("Volume creation result for {}: {:?}", vol_name, e);
+            }
+        }
+
         // Build host config with resource limits
         let mut host_config = HostConfig {
             network_mode: Some(self.network_name.clone()),
@@ -489,17 +506,31 @@ impl DockerClient {
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
             memory: Some((config.memory_mb * 1024 * 1024) as i64),
             // Mount Docker socket for challenge containers to run agent evaluations
-            // Mount tasks directory both to internal path AND to host path for Docker-in-Docker
-            // Mount persistent Docker volume for challenge state (evaluation progress, etc.)
+            // Use named Docker volumes for DinD - they are auto-created and persistent
+            // Each volume is mounted to both internal path AND host path for DinD compatibility
+            // Host path is /var/lib/docker/volumes/{name}/_data (standard Docker volume location)
             binds: Some(vec![
                 "/var/run/docker.sock:/var/run/docker.sock:rw".to_string(),
-                "/tmp/platform-tasks:/app/data/tasks:rw".to_string(), // Override internal tasks
-                "/tmp/platform-tasks:/tmp/platform-tasks:rw".to_string(), // For DinD path mapping
-                "/tmp/platform-cache:/root/.cache/term-challenge:rw".to_string(), // Cache bind mount for DinD
-                "/tmp/platform-cache:/tmp/platform-cache:rw".to_string(), // For DinD path mapping
-                "/tmp/platform-evals:/tmp/term-challenge-evals:rw".to_string(), // Eval logs for DinD
-                "/tmp/platform-evals:/tmp/platform-evals:rw".to_string(), // For DinD path mapping
-                format!("{}:/data:rw", volume_name), // Named volume for persistent state
+                // Tasks volume - for task data
+                format!("{}:/app/data/tasks:rw", tasks_volume),
+                format!(
+                    "{}:/var/lib/docker/volumes/{}/_data:rw",
+                    tasks_volume, tasks_volume
+                ),
+                // Cache volume - for downloaded datasets
+                format!("{}:/root/.cache/term-challenge:rw", dind_cache_volume),
+                format!(
+                    "{}:/var/lib/docker/volumes/{}/_data:rw",
+                    dind_cache_volume, dind_cache_volume
+                ),
+                // Evals volume - for evaluation logs
+                format!("{}:/tmp/term-challenge-evals:rw", evals_volume),
+                format!(
+                    "{}:/var/lib/docker/volumes/{}/_data:rw",
+                    evals_volume, evals_volume
+                ),
+                // Challenge-specific persistent state volume
+                format!("{}:/data:rw", volume_name),
             ]),
             ..Default::default()
         };
@@ -535,14 +566,15 @@ impl DockerClient {
         env.push(format!("RUST_LOG={}", rust_log));
         // Force challenge server to listen on port 8080 (orchestrator expects this)
         env.push("PORT=8080".to_string());
-        // For Docker-in-Docker: tasks are at /host-tasks on host (we mount below)
-        // The HOST_TASKS_DIR tells the challenge how to map container paths to host paths
-        env.push("HOST_TASKS_DIR=/tmp/platform-tasks".to_string());
-        // For Docker-in-Docker: cache directory mapping (for downloaded datasets)
-        env.push("HOST_CACHE_DIR=/tmp/platform-cache".to_string());
+        // For Docker-in-Docker: use Docker volume paths on host
+        // The HOST_*_DIR tells the challenge how to map container paths to host paths for DinD
+        env.push("HOST_TASKS_DIR=/var/lib/docker/volumes/term-challenge-tasks/_data".to_string());
+        env.push("HOST_CACHE_DIR=/var/lib/docker/volumes/term-challenge-cache/_data".to_string());
         env.push("CACHE_DIR=/root/.cache/term-challenge".to_string());
-        // For Docker-in-Docker: eval logs directory mapping
-        env.push("HOST_BENCHMARK_RESULTS_DIR=/tmp/platform-evals".to_string());
+        env.push(
+            "HOST_BENCHMARK_RESULTS_DIR=/var/lib/docker/volumes/term-challenge-evals/_data"
+                .to_string(),
+        );
         env.push("BENCHMARK_RESULTS_DIR=/tmp/term-challenge-evals".to_string());
         // Pass through DEVELOPMENT_MODE for local image support
         if let Ok(dev_mode) = std::env::var("DEVELOPMENT_MODE") {

@@ -14,17 +14,21 @@
 //! Environment:
 //!   BROKER_SOCKET      Unix socket path
 //!   BROKER_WS_PORT     WebSocket port
+//!   BROKER_HTTP_PORT   HTTP health check port (default: 8091, 0 to disable)
 //!   BROKER_JWT_SECRET  JWT secret for WebSocket auth (required for WS in production)
 //!   BROKER_DEV_MODE    Enable development mode (relaxed policy)
 
 use secure_container_runtime::{run_ws_server, ContainerBroker, SecurityPolicy, WsConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, Level};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 const DEFAULT_SOCKET: &str = "/var/run/platform/container-broker.sock";
 const DEFAULT_WS_PORT: u16 = 8090;
+const DEFAULT_HTTP_PORT: u16 = 8091;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,6 +56,11 @@ async fn main() -> anyhow::Result<()> {
 
     let ws_only = args.contains(&"--ws-only".to_string());
 
+    let http_port: u16 = parse_arg(&args, "--http-port")
+        .or_else(|| std::env::var("BROKER_HTTP_PORT").ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_HTTP_PORT);
+
     // Load policy
     let policy = if std::env::var("BROKER_DEV_MODE").is_ok() {
         info!("Using development security policy");
@@ -70,6 +79,16 @@ async fn main() -> anyhow::Result<()> {
     info!("  - Docker socket mounting blocked");
     info!("  - Resource limits enforced");
     info!("  - Audit logging enabled");
+
+    // Start HTTP health server if enabled
+    if http_port > 0 {
+        info!("HTTP health server: http://0.0.0.0:{}/health", http_port);
+        tokio::spawn(async move {
+            if let Err(e) = run_health_server(http_port).await {
+                warn!("HTTP health server error: {}", e);
+            }
+        });
+    }
 
     // Start WebSocket server if enabled
     let ws_handle = if ws_port > 0 {
@@ -126,4 +145,35 @@ fn parse_arg(args: &[String], flag: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Simple HTTP server for health checks
+/// Responds to any request on /health with "OK"
+async fn run_health_server(port: u16) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+
+    loop {
+        match listener.accept().await {
+            Ok((mut socket, _)) => {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    // Read request (we don't really care about the content)
+                    let _ = socket.read(&mut buf).await;
+
+                    // Check if it's a health check request
+                    let request = String::from_utf8_lossy(&buf);
+                    let response = if request.contains("/health") || request.contains("GET /") {
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+                    } else {
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found"
+                    };
+
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+            Err(e) => {
+                warn!("HTTP accept error: {}", e);
+            }
+        }
+    }
 }

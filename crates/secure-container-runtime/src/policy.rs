@@ -64,7 +64,11 @@ impl Default for SecurityPolicy {
             max_pids: 512,
             max_containers_per_challenge: 100,
             max_containers_per_owner: 200,
-            allowed_mount_prefixes: vec!["/tmp/".to_string(), "/var/lib/platform/".to_string()],
+            allowed_mount_prefixes: vec![
+                "/tmp/".to_string(),
+                "/var/lib/platform/".to_string(),
+                "/var/lib/docker/volumes/".to_string(),
+            ],
             forbidden_mount_paths: forbidden,
             allow_privileged: false,
             allow_host_network: false,
@@ -89,6 +93,10 @@ impl SecurityPolicy {
         policy
             .allowed_mount_prefixes
             .push("/workspace/".to_string());
+        // Allow Docker volume paths for Docker-in-Docker scenarios
+        policy
+            .allowed_mount_prefixes
+            .push("/var/lib/docker/volumes/".to_string());
         policy
     }
 

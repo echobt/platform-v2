@@ -74,6 +74,26 @@ pub enum Request {
 
     /// Health check
     Ping { request_id: String },
+
+    /// Copy file from container using Docker archive API
+    /// Returns file contents as base64-encoded data
+    CopyFrom {
+        container_id: String,
+        /// Path inside container to copy from
+        path: String,
+        request_id: String,
+    },
+
+    /// Copy file to container using Docker archive API
+    /// File contents should be base64-encoded
+    CopyTo {
+        container_id: String,
+        /// Path inside container to copy to
+        path: String,
+        /// Base64-encoded file contents
+        data: String,
+        request_id: String,
+    },
 }
 
 impl Request {
@@ -89,6 +109,8 @@ impl Request {
             Request::Logs { request_id, .. } => request_id,
             Request::Pull { request_id, .. } => request_id,
             Request::Ping { request_id, .. } => request_id,
+            Request::CopyFrom { request_id, .. } => request_id,
+            Request::CopyTo { request_id, .. } => request_id,
         }
     }
 
@@ -169,6 +191,18 @@ pub enum Response {
     /// Pong response
     Pong { version: String, request_id: String },
 
+    /// File copied from container - base64-encoded data
+    CopyFromResult {
+        /// Base64-encoded file contents
+        data: String,
+        /// Original file size in bytes
+        size: usize,
+        request_id: String,
+    },
+
+    /// File copied to container successfully
+    CopyToResult { request_id: String },
+
     /// Error response
     Error {
         error: ContainerError,
@@ -189,6 +223,8 @@ impl Response {
             Response::LogsResult { request_id, .. } => request_id,
             Response::Pulled { request_id, .. } => request_id,
             Response::Pong { request_id, .. } => request_id,
+            Response::CopyFromResult { request_id, .. } => request_id,
+            Response::CopyToResult { request_id, .. } => request_id,
             Response::Error { request_id, .. } => request_id,
         }
     }

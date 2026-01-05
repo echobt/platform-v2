@@ -119,29 +119,56 @@ async fn main() -> anyhow::Result<()> {
     info!("  Database: platform_server");
 
     // Sync metagraph BEFORE accepting connections (blocking)
+    // Can be skipped with SKIP_METAGRAPH_SYNC=true for local testing
     info!("");
-    info!("  Syncing metagraph (netuid={})...", args.netuid);
-    let metagraph = match platform_bittensor::BittensorClient::new(&args.subtensor_endpoint).await {
-        Ok(client) => match platform_bittensor::sync_metagraph(&client, args.netuid).await {
-            Ok(mg) => {
-                info!("  Metagraph synced: {} neurons", mg.n);
-                Some(mg)
+    let skip_metagraph_sync = std::env::var("SKIP_METAGRAPH_SYNC").is_ok();
+
+    let (metagraph, validator_whitelist) = if skip_metagraph_sync {
+        info!("  SKIP_METAGRAPH_SYNC enabled - using static validator whitelist");
+
+        // Parse validator whitelist from environment
+        let whitelist: Vec<String> = std::env::var("VALIDATOR_WHITELIST")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if whitelist.is_empty() {
+            warn!("  No validators in VALIDATOR_WHITELIST - auth will fail for all validators");
+        } else {
+            info!("  Whitelisted validators: {}", whitelist.len());
+            for v in &whitelist {
+                info!("    - {}...", &v[..16.min(v.len())]);
             }
+        }
+
+        (None, whitelist)
+    } else {
+        info!("  Syncing metagraph (netuid={})...", args.netuid);
+        let mg = match platform_bittensor::BittensorClient::new(&args.subtensor_endpoint).await {
+            Ok(client) => match platform_bittensor::sync_metagraph(&client, args.netuid).await {
+                Ok(mg) => {
+                    info!("  Metagraph synced: {} neurons", mg.n);
+                    Some(mg)
+                }
+                Err(e) => {
+                    warn!(
+                        "  Metagraph sync failed: {} (validators will have stake=0)",
+                        e
+                    );
+                    None
+                }
+            },
             Err(e) => {
                 warn!(
-                    "  Metagraph sync failed: {} (validators will have stake=0)",
+                    "  Could not connect to subtensor: {} (validators will have stake=0)",
                     e
                 );
                 None
             }
-        },
-        Err(e) => {
-            warn!(
-                "  Could not connect to subtensor: {} (validators will have stake=0)",
-                e
-            );
-            None
-        }
+        };
+        (mg, vec![])
     };
 
     // Initialize challenge orchestrator (loads challenges from DB)
@@ -163,11 +190,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create application state
-    let state = Arc::new(AppState::new_dynamic(
+    let state = Arc::new(AppState::new_dynamic_with_whitelist(
         db,
         Some(args.owner_hotkey.clone()),
         challenge_manager.clone(),
         metagraph,
+        validator_whitelist,
     ));
 
     // Build router

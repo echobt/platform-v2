@@ -8,6 +8,7 @@ use crate::websocket::events::EventBroadcaster;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use platform_bittensor::Metagraph;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct AppState {
@@ -23,6 +24,8 @@ pub struct AppState {
     pub task_leases: DashMap<String, TaskLease>,
     /// Metagraph for validator stake lookups
     pub metagraph: RwLock<Option<Metagraph>>,
+    /// Static validator whitelist (for testing without metagraph)
+    pub validator_whitelist: RwLock<HashSet<String>>,
 }
 
 impl AppState {
@@ -43,6 +46,7 @@ impl AppState {
             challenge_manager: None,
             task_leases: DashMap::new(),
             metagraph: RwLock::new(None),
+            validator_whitelist: RwLock::new(HashSet::new()),
         }
     }
 
@@ -63,11 +67,45 @@ impl AppState {
             challenge_manager,
             task_leases: DashMap::new(),
             metagraph: RwLock::new(metagraph),
+            validator_whitelist: RwLock::new(HashSet::new()),
+        }
+    }
+
+    /// New constructor for dynamic orchestration mode with validator whitelist
+    pub fn new_dynamic_with_whitelist(
+        db: DbPool,
+        owner_hotkey: Option<String>,
+        challenge_manager: Option<Arc<ChallengeManager>>,
+        metagraph: Option<Metagraph>,
+        validator_whitelist: Vec<String>,
+    ) -> Self {
+        Self {
+            db,
+            challenge_id: None,
+            sessions: DashMap::new(),
+            broadcaster: Arc::new(EventBroadcaster::new(1000)),
+            owner_hotkey,
+            challenge_proxy: None,
+            challenge_manager,
+            task_leases: DashMap::new(),
+            metagraph: RwLock::new(metagraph),
+            validator_whitelist: RwLock::new(validator_whitelist.into_iter().collect()),
         }
     }
 
     /// Get validator stake from metagraph (returns 0 if not found)
+    /// If validator is in whitelist, returns a high stake value (for testing)
     pub fn get_validator_stake(&self, hotkey: &str) -> u64 {
+        // First check whitelist (for testing without metagraph)
+        {
+            let whitelist = self.validator_whitelist.read();
+            if whitelist.contains(hotkey) {
+                // Return high stake for whitelisted validators (100k TAO equivalent)
+                return 100_000_000_000_000; // 100k TAO in RAO
+            }
+        }
+
+        // Then check metagraph
         use sp_core::crypto::Ss58Codec;
         let mg = self.metagraph.read();
         if let Some(ref metagraph) = *mg {
@@ -79,6 +117,16 @@ impl AppState {
             }
         }
         0
+    }
+
+    /// Check if a validator is in the whitelist
+    pub fn is_whitelisted(&self, hotkey: &str) -> bool {
+        self.validator_whitelist.read().contains(hotkey)
+    }
+
+    /// Add validator to whitelist
+    pub fn add_to_whitelist(&self, hotkey: String) {
+        self.validator_whitelist.write().insert(hotkey);
     }
 
     /// Update metagraph

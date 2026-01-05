@@ -220,6 +220,25 @@ impl ContainerBroker {
             } => self.get_logs(&container_id, tail, request_id).await,
 
             Request::Pull { image, request_id } => self.pull_image(&image, request_id).await,
+
+            Request::CopyFrom {
+                container_id,
+                path,
+                request_id,
+            } => {
+                self.copy_from_container(&container_id, &path, request_id)
+                    .await
+            }
+
+            Request::CopyTo {
+                container_id,
+                path,
+                data,
+                request_id,
+            } => {
+                self.copy_to_container(&container_id, &path, &data, request_id)
+                    .await
+            }
         }
     }
 
@@ -830,6 +849,180 @@ impl ContainerBroker {
         Response::Pulled {
             image: image.to_string(),
             request_id,
+        }
+    }
+
+    /// Copy a file from container using Docker archive API
+    /// Returns base64-encoded file contents
+    async fn copy_from_container(
+        &self,
+        container_id: &str,
+        path: &str,
+        request_id: String,
+    ) -> Response {
+        use bollard::container::DownloadFromContainerOptions;
+        use futures::TryStreamExt;
+
+        let options = DownloadFromContainerOptions { path };
+
+        // Download returns a tar archive stream of Bytes chunks
+        let stream = self
+            .docker
+            .download_from_container(container_id, Some(options));
+
+        // Collect all chunks into a single buffer
+        let chunks: Vec<bytes::Bytes> = match stream.try_collect().await {
+            Ok(data) => data,
+            Err(e) => {
+                return Response::error(
+                    request_id,
+                    ContainerError::DockerError(format!(
+                        "Failed to download from container: {}",
+                        e
+                    )),
+                );
+            }
+        };
+
+        // Concatenate all chunks into a single Vec<u8>
+        let tar_data: Vec<u8> = chunks.into_iter().flat_map(|b| b.to_vec()).collect();
+
+        // Extract the file from the tar archive
+        let mut archive = tar::Archive::new(tar_data.as_slice());
+        let mut entries = match archive.entries() {
+            Ok(e) => e,
+            Err(e) => {
+                return Response::error(
+                    request_id,
+                    ContainerError::DockerError(format!("Failed to read tar archive: {}", e)),
+                );
+            }
+        };
+
+        // Get the first file from the archive (there should only be one)
+        let mut file_data = Vec::new();
+        if let Some(entry) = entries.next() {
+            match entry {
+                Ok(mut entry) => {
+                    if let Err(e) = std::io::Read::read_to_end(&mut entry, &mut file_data) {
+                        return Response::error(
+                            request_id,
+                            ContainerError::DockerError(format!(
+                                "Failed to read file from tar: {}",
+                                e
+                            )),
+                        );
+                    }
+                }
+                Err(e) => {
+                    return Response::error(
+                        request_id,
+                        ContainerError::DockerError(format!("Failed to read tar entry: {}", e)),
+                    );
+                }
+            }
+        }
+
+        use base64::Engine;
+        let size = file_data.len();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&file_data);
+
+        info!(
+            container_id = %container_id,
+            path = %path,
+            size = size,
+            "Copied file from container"
+        );
+
+        Response::CopyFromResult {
+            data: encoded,
+            size,
+            request_id,
+        }
+    }
+
+    /// Copy a file to container using Docker archive API
+    /// Accepts base64-encoded file contents
+    async fn copy_to_container(
+        &self,
+        container_id: &str,
+        path: &str,
+        data: &str,
+        request_id: String,
+    ) -> Response {
+        use base64::Engine;
+        use bollard::container::UploadToContainerOptions;
+
+        // Decode base64 data
+        let file_data = match base64::engine::general_purpose::STANDARD.decode(data) {
+            Ok(d) => d,
+            Err(e) => {
+                return Response::error(
+                    request_id,
+                    ContainerError::InvalidConfig(format!("Invalid base64 data: {}", e)),
+                );
+            }
+        };
+
+        // Parse the path to get directory and filename
+        let path_obj = std::path::Path::new(path);
+        let parent_dir = path_obj
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/".to_string());
+        let filename = path_obj
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+
+        // Create a tar archive with the file
+        let mut tar_buffer = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_buffer);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(file_data.len() as u64);
+            header.set_mode(0o755); // Make executable
+            header.set_cksum();
+
+            if let Err(e) = builder.append_data(&mut header, &filename, file_data.as_slice()) {
+                return Response::error(
+                    request_id,
+                    ContainerError::DockerError(format!("Failed to create tar archive: {}", e)),
+                );
+            }
+
+            if let Err(e) = builder.finish() {
+                return Response::error(
+                    request_id,
+                    ContainerError::DockerError(format!("Failed to finish tar archive: {}", e)),
+                );
+            }
+        }
+
+        let options = UploadToContainerOptions {
+            path: parent_dir,
+            ..Default::default()
+        };
+
+        // Upload the tar archive
+        match self
+            .docker
+            .upload_to_container(container_id, Some(options), tar_buffer.into())
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    container_id = %container_id,
+                    path = %path,
+                    size = file_data.len(),
+                    "Copied file to container"
+                );
+                Response::CopyToResult { request_id }
+            }
+            Err(e) => Response::error(
+                request_id,
+                ContainerError::DockerError(format!("Failed to upload to container: {}", e)),
+            ),
         }
     }
 
