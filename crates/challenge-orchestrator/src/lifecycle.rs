@@ -389,6 +389,75 @@ mod tests {
         assert!(ops.iter().any(|op| op == "remove:container-remove-old"));
     }
 
+    #[tokio::test]
+    async fn test_add_records_config_and_instance_state() {
+        let mock = MockDocker::default();
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut manager = LifecycleManager::new(mock.clone(), challenges);
+        let challenge_id = ChallengeId::new();
+        let config = sample_config(challenge_id, "ghcr.io/org/add:v1");
+
+        manager.add(config.clone()).await.expect("add succeeds");
+
+        assert!(manager.challenges.read().contains_key(&challenge_id));
+        assert!(manager.configs.read().contains_key(&challenge_id));
+
+        let ops = mock.operations();
+        assert!(ops.contains(&format!("pull:{}", config.docker_image)));
+        assert!(ops.contains(&format!("start:{}", challenge_id)));
+    }
+
+    #[tokio::test]
+    async fn test_stop_all_removes_every_challenge() {
+        let mock = MockDocker::default();
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut manager = LifecycleManager::new(mock.clone(), challenges);
+
+        let first_id = ChallengeId::new();
+        let second_id = ChallengeId::new();
+
+        manager
+            .configs
+            .write()
+            .insert(first_id, sample_config(first_id, "ghcr.io/org/first:v1"));
+        manager
+            .configs
+            .write()
+            .insert(second_id, sample_config(second_id, "ghcr.io/org/second:v1"));
+
+        manager.challenges.write().insert(
+            first_id,
+            sample_instance(
+                first_id,
+                "container-first",
+                "ghcr.io/org/first:v1",
+                ContainerStatus::Running,
+            ),
+        );
+        manager.challenges.write().insert(
+            second_id,
+            sample_instance(
+                second_id,
+                "container-second",
+                "ghcr.io/org/second:v1",
+                ContainerStatus::Running,
+            ),
+        );
+
+        let results = manager.stop_all().await;
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|(_, res)| res.is_ok()));
+        assert!(manager.challenges.read().is_empty());
+        assert!(manager.configs.read().is_empty());
+
+        let ops = mock.operations();
+        assert!(ops.contains(&"stop:container-first".to_string()));
+        assert!(ops.contains(&"remove:container-first".to_string()));
+        assert!(ops.contains(&"stop:container-second".to_string()));
+        assert!(ops.contains(&"remove:container-second".to_string()));
+    }
+
     #[derive(Clone, Default)]
     struct MockDocker {
         inner: Arc<MockDockerInner>,

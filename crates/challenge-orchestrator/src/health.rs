@@ -204,7 +204,7 @@ mod tests {
     use platform_core::ChallengeId;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -335,6 +335,55 @@ mod tests {
         (addr, handle)
     }
 
+    async fn spawn_repeating_health_server(
+        status_line: &str,
+        body: &str,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind repeating server");
+        let addr = listener.local_addr().expect("read addr");
+        let body = body.to_string();
+        let response = Arc::new(format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(), body
+        ));
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let resp = response.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+
+        (addr, handle)
+    }
+
+    async fn spawn_closing_health_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind closing server");
+        let addr = listener.local_addr().expect("read addr");
+        let handle = tokio::spawn(async move {
+            loop {
+                let (socket, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                drop(socket);
+            }
+        });
+        (addr, handle)
+    }
+
     #[tokio::test]
     async fn test_health_monitor_check_sets_running_on_success() {
         let (addr, handle) = spawn_health_server("200 OK", r#"{"status":"ok"}"#).await;
@@ -387,6 +436,132 @@ mod tests {
                 .expect("challenge present")
                 .status,
             ContainerStatus::Unhealthy
+        );
+
+        handle.await.expect("server finished");
+    }
+
+    #[tokio::test]
+    async fn test_health_monitor_start_updates_status() {
+        let (addr, handle) = spawn_repeating_health_server("200 OK", r#"{"status":"ok"}"#).await;
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut instance = sample_instance(ContainerStatus::Starting);
+        instance.endpoint = format!("http://{}", addr);
+        let challenge_id = instance.challenge_id;
+        challenges.write().insert(challenge_id, instance);
+
+        let monitor = HealthMonitor::new(challenges.clone(), Duration::from_millis(10));
+        monitor.start().await.expect("monitor starts");
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            if challenges
+                .read()
+                .get(&challenge_id)
+                .map(|inst| inst.status == ContainerStatus::Running)
+                .unwrap_or(false)
+            {
+                break;
+            }
+
+            if Instant::now() > deadline {
+                panic!("status never updated to running");
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_health_monitor_start_marks_unhealthy_on_failed_response() {
+        let (addr, handle) =
+            spawn_repeating_health_server("500 Internal Server Error", r#"{"status":"error"}"#)
+                .await;
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut instance = sample_instance(ContainerStatus::Running);
+        instance.endpoint = format!("http://{}", addr);
+        let challenge_id = instance.challenge_id;
+        challenges.write().insert(challenge_id, instance);
+
+        let monitor = HealthMonitor::new(challenges.clone(), Duration::from_millis(10));
+        monitor.start().await.expect("monitor starts");
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            if challenges
+                .read()
+                .get(&challenge_id)
+                .map(|inst| inst.status == ContainerStatus::Unhealthy)
+                .unwrap_or(false)
+            {
+                break;
+            }
+
+            if Instant::now() > deadline {
+                panic!("status never updated to unhealthy");
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_health_monitor_start_handles_request_error() {
+        let (addr, handle) = spawn_closing_health_server().await;
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut instance = sample_instance(ContainerStatus::Running);
+        instance.endpoint = format!("http://{}", addr);
+        let challenge_id = instance.challenge_id;
+        challenges.write().insert(challenge_id, instance);
+
+        let monitor = HealthMonitor::new(challenges.clone(), Duration::from_millis(10));
+        monitor.start().await.expect("monitor starts");
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            if challenges
+                .read()
+                .get(&challenge_id)
+                .map(|inst| inst.status == ContainerStatus::Unhealthy)
+                .unwrap_or(false)
+            {
+                break;
+            }
+
+            if Instant::now() > deadline {
+                panic!("status never updated after request error");
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_health_monitor_check_treats_parse_error_as_healthy() {
+        let (addr, handle) = spawn_health_server("200 OK", "not-json").await;
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let mut instance = sample_instance(ContainerStatus::Starting);
+        instance.endpoint = format!("http://{}", addr);
+        let challenge_id = instance.challenge_id;
+        challenges.write().insert(challenge_id, instance);
+
+        let monitor = HealthMonitor::new(challenges.clone(), Duration::from_secs(5));
+        let status = monitor.check(&challenge_id).await.expect("status returned");
+
+        assert_eq!(status, ContainerStatus::Running);
+        assert_eq!(
+            challenges
+                .read()
+                .get(&challenge_id)
+                .expect("challenge present")
+                .status,
+            ContainerStatus::Running
         );
 
         handle.await.expect("server finished");

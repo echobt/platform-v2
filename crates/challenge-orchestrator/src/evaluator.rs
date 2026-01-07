@@ -339,6 +339,25 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_proxy_request_requires_running_status() {
+        let challenges = Arc::new(RwLock::new(HashMap::new()));
+        let instance = sample_instance(ContainerStatus::Starting);
+        let challenge_id = instance.challenge_id;
+        challenges.write().insert(challenge_id, instance);
+
+        let evaluator = ChallengeEvaluator::new(challenges);
+        let err = evaluator
+            .proxy_request(challenge_id, "health", reqwest::Method::GET, None, None)
+            .await
+            .expect_err("non-running challenge should be rejected");
+
+        match err {
+            EvaluatorError::ChallengeNotReady(id) => assert_eq!(id, challenge_id),
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
     #[test]
     fn test_list_challenges_returns_current_instances() {
         let challenges = Arc::new(RwLock::new(HashMap::new()));
@@ -455,6 +474,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_proxy_request_reports_challenge_error() {
+        let (addr, handle) =
+            spawn_static_http_server("503 Service Unavailable", "oops", "text/plain").await;
+        let endpoint = format!("http://{}", addr);
+        let (evaluator, challenge_id) = evaluator_with_instance(endpoint, ContainerStatus::Running);
+
+        let err = evaluator
+            .proxy_request(challenge_id, "custom", reqwest::Method::GET, None, Some(5))
+            .await
+            .expect_err("should surface challenge error");
+
+        match err {
+            EvaluatorError::ChallengeError { status, message } => {
+                assert_eq!(status, 503);
+                assert_eq!(message, "oops");
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        handle.await.expect("server finished");
+    }
+
+    #[tokio::test]
     async fn test_get_info_fetches_metadata() {
         let body = r#"{"name":"demo","version":"0.1.0","mechanism_id":7}"#;
         let (addr, handle) = spawn_static_http_server("200 OK", body, "application/json").await;
@@ -469,6 +511,29 @@ mod tests {
         assert_eq!(info.name, "demo");
         assert_eq!(info.version, "0.1.0");
         assert_eq!(info.mechanism_id, 7);
+        handle.await.expect("server finished");
+    }
+
+    #[tokio::test]
+    async fn test_get_info_reports_error_status() {
+        let (addr, handle) =
+            spawn_static_http_server("404 Not Found", "missing", "text/plain").await;
+        let endpoint = format!("http://{}", addr);
+        let (evaluator, challenge_id) = evaluator_with_instance(endpoint, ContainerStatus::Running);
+
+        let err = evaluator
+            .get_info(challenge_id)
+            .await
+            .expect_err("should return challenge error for non-200 info");
+
+        match err {
+            EvaluatorError::ChallengeError { status, message } => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "Failed to get challenge info");
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
         handle.await.expect("server finished");
     }
 
@@ -495,6 +560,21 @@ mod tests {
             .await
             .expect("health request succeeds"));
         handle_err.await.expect("server finished");
+    }
+
+    #[tokio::test]
+    async fn test_check_health_handles_request_failure() {
+        let (addr, handle) = spawn_drop_http_server().await;
+        let (evaluator, challenge_id) =
+            evaluator_with_instance(format!("http://{}", addr), ContainerStatus::Running);
+
+        let result = evaluator
+            .check_health(challenge_id)
+            .await
+            .expect("network errors should be converted to false");
+
+        assert!(!result);
+        handle.await.expect("server finished");
     }
 
     fn evaluator_with_instance(

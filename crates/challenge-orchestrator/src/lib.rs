@@ -53,10 +53,22 @@ pub const PLATFORM_NETWORK: &str = "platform-network";
 
 impl ChallengeOrchestrator {
     pub async fn new(config: OrchestratorConfig) -> anyhow::Result<Self> {
+        #[cfg(test)]
+        if let Some(docker) = Self::take_test_docker_client() {
+            return Self::bootstrap_with_docker(docker, config).await;
+        }
+
         // Auto-detect the network from the validator container
         // This ensures challenge containers are on the same network as the validator
         let docker = DockerClient::connect_auto_detect().await?;
 
+        Self::bootstrap_with_docker(docker, config).await
+    }
+
+    async fn bootstrap_with_docker(
+        docker: DockerClient,
+        config: OrchestratorConfig,
+    ) -> anyhow::Result<Self> {
         // Ensure the detected network exists (creates it if running outside Docker)
         docker.ensure_network().await?;
 
@@ -67,6 +79,26 @@ impl ChallengeOrchestrator {
         }
 
         Self::with_docker(docker, config).await
+    }
+
+    #[cfg(test)]
+    fn test_docker_client_slot() -> &'static std::sync::Mutex<Option<DockerClient>> {
+        use std::sync::{Mutex, OnceLock};
+        static SLOT: OnceLock<Mutex<Option<DockerClient>>> = OnceLock::new();
+        SLOT.get_or_init(|| Mutex::new(None))
+    }
+
+    #[cfg(test)]
+    fn take_test_docker_client() -> Option<DockerClient> {
+        Self::test_docker_client_slot().lock().unwrap().take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_docker_client(docker: DockerClient) {
+        Self::test_docker_client_slot()
+            .lock()
+            .unwrap()
+            .replace(docker);
     }
 
     /// Build an orchestrator with a custom Docker implementation
@@ -311,9 +343,25 @@ pub enum ContainerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::docker::DockerBridge;
     use async_trait::async_trait;
+    use bollard::container::{
+        Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogOutput,
+        LogsOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+    };
+    use bollard::errors::Error as DockerError;
+    use bollard::image::CreateImageOptions;
+    use bollard::models::{
+        ContainerCreateResponse, ContainerInspectResponse, ContainerSummary, CreateImageInfo,
+        EndpointSettings, Network, NetworkSettings,
+    };
+    use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions, ListNetworksOptions};
+    use bollard::volume::CreateVolumeOptions;
     use chrono::Utc;
+    use futures::{stream, Stream};
     use platform_core::ChallengeId;
+    use std::collections::HashMap;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -647,5 +695,297 @@ mod tests {
             "platform-".to_string(),
         ];
         assert_eq!(excludes, &expected);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_all_challenges_refreshes_each_container() {
+        let docker = TestDocker::default();
+        let orchestrator = orchestrator_with_mock(docker.clone()).await;
+        let config_a = sample_config("ghcr.io/platformnetwork/challenge:refresh-a");
+        let config_b = sample_config("ghcr.io/platformnetwork/challenge:refresh-b");
+        let id_a = config_a.challenge_id;
+        let id_b = config_b.challenge_id;
+
+        orchestrator
+            .add_challenge(config_a.clone())
+            .await
+            .expect("added first challenge");
+        orchestrator
+            .add_challenge(config_b.clone())
+            .await
+            .expect("added second challenge");
+
+        let first_initial = orchestrator
+            .get_challenge(&id_a)
+            .expect("first challenge present")
+            .container_id;
+        let second_initial = orchestrator
+            .get_challenge(&id_b)
+            .expect("second challenge present")
+            .container_id;
+
+        orchestrator
+            .refresh_all_challenges()
+            .await
+            .expect("refresh all succeeds");
+
+        let first_refreshed = orchestrator
+            .get_challenge(&id_a)
+            .expect("first challenge refreshed")
+            .container_id;
+        let second_refreshed = orchestrator
+            .get_challenge(&id_b)
+            .expect("second challenge refreshed")
+            .container_id;
+
+        assert_ne!(first_initial, first_refreshed);
+        assert_ne!(second_initial, second_refreshed);
+
+        let ops = docker.operations();
+        assert!(ops.contains(&format!("stop:{first_initial}")));
+        assert!(ops.contains(&format!("stop:{second_initial}")));
+    }
+
+    #[tokio::test]
+    async fn test_start_launches_health_monitor() {
+        let orchestrator = orchestrator_with_mock(TestDocker::default()).await;
+        orchestrator
+            .start()
+            .await
+            .expect("health monitor start succeeds");
+    }
+
+    #[tokio::test]
+    async fn test_evaluator_method_returns_shared_state() {
+        let docker = TestDocker::default();
+        let orchestrator = orchestrator_with_mock(docker).await;
+        let config = sample_config("ghcr.io/platformnetwork/challenge:evaluator");
+        let challenge_id = config.challenge_id;
+
+        orchestrator
+            .add_challenge(config)
+            .await
+            .expect("challenge added");
+
+        let evaluator = orchestrator.evaluator();
+        let ids: Vec<_> = evaluator
+            .list_challenges()
+            .into_iter()
+            .map(|status| status.challenge_id)
+            .collect();
+
+        assert_eq!(ids, vec![challenge_id]);
+    }
+
+    #[tokio::test]
+    async fn test_docker_method_exposes_underlying_client() {
+        let docker = TestDocker::default();
+        let orchestrator = orchestrator_with_mock(docker.clone()).await;
+
+        orchestrator
+            .docker()
+            .list_challenge_containers()
+            .await
+            .expect("list call succeeds");
+
+        let ops = docker.operations();
+        assert!(ops.contains(&"list_containers".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_new_uses_injected_docker_client() {
+        let bridge = TestDockerBridge::default();
+        let docker = DockerClient::with_bridge(bridge.clone(), PLATFORM_NETWORK);
+        ChallengeOrchestrator::set_test_docker_client(docker);
+
+        let original_hostname = std::env::var("HOSTNAME").ok();
+        std::env::set_var("HOSTNAME", "abcdef123456");
+
+        let orchestrator = ChallengeOrchestrator::new(OrchestratorConfig::default())
+            .await
+            .expect("constructed orchestrator");
+        assert_eq!(
+            bridge.created_networks(),
+            vec![PLATFORM_NETWORK.to_string()]
+        );
+        assert!(bridge
+            .connected_networks()
+            .iter()
+            .any(|name| name == PLATFORM_NETWORK));
+
+        drop(orchestrator);
+
+        if let Some(value) = original_hostname {
+            std::env::set_var("HOSTNAME", value);
+        } else {
+            std::env::remove_var("HOSTNAME");
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct TestDockerBridge {
+        inner: Arc<TestDockerBridgeInner>,
+    }
+
+    #[derive(Default)]
+    struct TestDockerBridgeInner {
+        available_networks: Mutex<Vec<String>>,
+        created_networks: Mutex<Vec<String>>,
+        connected_networks: Mutex<Vec<String>>,
+    }
+
+    impl TestDockerBridge {
+        fn created_networks(&self) -> Vec<String> {
+            self.inner.created_networks.lock().unwrap().clone()
+        }
+
+        fn connected_networks(&self) -> Vec<String> {
+            self.inner.connected_networks.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl DockerBridge for TestDockerBridge {
+        async fn ping(&self) -> Result<(), DockerError> {
+            Ok(())
+        }
+
+        async fn list_networks(
+            &self,
+            _options: Option<ListNetworksOptions<String>>,
+        ) -> Result<Vec<Network>, DockerError> {
+            let networks = self.inner.available_networks.lock().unwrap().clone();
+            Ok(networks
+                .into_iter()
+                .map(|name| Network {
+                    name: Some(name),
+                    ..Default::default()
+                })
+                .collect())
+        }
+
+        async fn create_network(
+            &self,
+            options: CreateNetworkOptions<String>,
+        ) -> Result<(), DockerError> {
+            self.inner
+                .created_networks
+                .lock()
+                .unwrap()
+                .push(options.name.clone());
+            self.inner
+                .available_networks
+                .lock()
+                .unwrap()
+                .push(options.name);
+            Ok(())
+        }
+
+        async fn inspect_container(
+            &self,
+            _id: &str,
+            _options: Option<InspectContainerOptions>,
+        ) -> Result<ContainerInspectResponse, DockerError> {
+            let mut map = HashMap::new();
+            for name in self
+                .inner
+                .connected_networks
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+            {
+                map.insert(name, EndpointSettings::default());
+            }
+            Ok(ContainerInspectResponse {
+                network_settings: Some(NetworkSettings {
+                    networks: Some(map),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        }
+
+        async fn connect_network(
+            &self,
+            network: &str,
+            _options: ConnectNetworkOptions<String>,
+        ) -> Result<(), DockerError> {
+            let mut connected = self.inner.connected_networks.lock().unwrap();
+            if !connected.iter().any(|name| name == network) {
+                connected.push(network.to_string());
+            }
+            let mut available = self.inner.available_networks.lock().unwrap();
+            if !available.iter().any(|name| name == network) {
+                available.push(network.to_string());
+            }
+            Ok(())
+        }
+
+        fn create_image_stream(
+            &self,
+            _options: Option<CreateImageOptions<String>>,
+        ) -> Pin<Box<dyn Stream<Item = Result<CreateImageInfo, DockerError>> + Send>> {
+            Box::pin(stream::empty::<Result<CreateImageInfo, DockerError>>())
+                as Pin<Box<dyn Stream<Item = Result<CreateImageInfo, DockerError>> + Send>>
+        }
+
+        async fn create_volume(
+            &self,
+            _options: CreateVolumeOptions<String>,
+        ) -> Result<(), DockerError> {
+            Ok(())
+        }
+
+        async fn create_container(
+            &self,
+            _options: Option<CreateContainerOptions<String>>,
+            _config: Config<String>,
+        ) -> Result<ContainerCreateResponse, DockerError> {
+            Ok(ContainerCreateResponse {
+                id: "test-container".to_string(),
+                warnings: Vec::new(),
+            })
+        }
+
+        async fn start_container(
+            &self,
+            _id: &str,
+            _options: Option<StartContainerOptions<String>>,
+        ) -> Result<(), DockerError> {
+            Ok(())
+        }
+
+        async fn stop_container(
+            &self,
+            _id: &str,
+            _options: Option<StopContainerOptions>,
+        ) -> Result<(), DockerError> {
+            Ok(())
+        }
+
+        async fn remove_container(
+            &self,
+            _id: &str,
+            _options: Option<RemoveContainerOptions>,
+        ) -> Result<(), DockerError> {
+            Ok(())
+        }
+
+        async fn list_containers(
+            &self,
+            _options: Option<ListContainersOptions<String>>,
+        ) -> Result<Vec<ContainerSummary>, DockerError> {
+            Ok(Vec::new())
+        }
+
+        fn logs_stream(
+            &self,
+            _id: &str,
+            _options: LogsOptions<String>,
+        ) -> Pin<Box<dyn Stream<Item = Result<LogOutput, DockerError>> + Send>> {
+            Box::pin(stream::empty::<Result<LogOutput, DockerError>>())
+                as Pin<Box<dyn Stream<Item = Result<LogOutput, DockerError>> + Send>>
+        }
     }
 }
