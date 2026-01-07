@@ -755,4 +755,92 @@ mod tests {
         assert_eq!(status.failed_challenges, 0);
         assert_eq!(status.last_epoch, 0);
     }
+
+    #[tokio::test]
+    async fn test_register_endpoints_adds_all_entries() {
+        let client = SubtensorClient::new(BittensorConfig::local(9));
+        let collector = ChallengeWeightCollector::new(client);
+
+        collector
+            .register_endpoints(vec![
+                sample_endpoint("one", 1, "http://one"),
+                sample_endpoint("two", 2, "http://two"),
+            ])
+            .await;
+
+        let endpoints = collector.get_endpoints().await;
+        assert_eq!(endpoints.len(), 2);
+        let names: Vec<_> = endpoints.into_iter().map(|e| e.name).collect();
+        assert!(names.contains(&"one".to_string()));
+        assert!(names.contains(&"two".to_string()));
+    }
+
+    #[test]
+    fn test_convert_hotkeys_with_resolver_burn_uid() {
+        let entries = vec![HotkeyWeightEntry {
+            hotkey: "burn-hotkey".to_string(),
+            weight: 0.75,
+        }];
+
+        let (uids, weights) =
+            ChallengeWeightCollector::convert_hotkeys_with_resolver(&entries, |_| Some(BURN_UID));
+
+        assert_eq!(uids, vec![BURN_UID]);
+        assert_eq!(weights.len(), 1);
+        assert!(weights[0] > (MAX_WEIGHT / 2));
+    }
+
+    #[test]
+    fn test_convert_hotkeys_to_uids_uses_client_lookup() {
+        let mut client = SubtensorClient::new(BittensorConfig::local(3));
+        client.set_uid_overrides(vec![("hk-a".to_string(), 4), ("hk-b".to_string(), 7)]);
+        let collector = ChallengeWeightCollector::new(client);
+
+        let entries = vec![
+            HotkeyWeightEntry {
+                hotkey: "hk-a".to_string(),
+                weight: 0.4,
+            },
+            HotkeyWeightEntry {
+                hotkey: "hk-b".to_string(),
+                weight: 0.6,
+            },
+        ];
+
+        let (uids, weights) = collector.convert_hotkeys_to_uids(&entries);
+
+        assert_eq!(uids, vec![4, 7]);
+        assert_eq!(weights.len(), 2);
+        assert!(weights.iter().all(|w| *w > 0));
+    }
+
+    #[tokio::test]
+    async fn test_challenge_weight_collector_builder_registers_endpoints() {
+        let client = SubtensorClient::new(BittensorConfig::local(5));
+        let collector = ChallengeWeightCollectorBuilder::new(client)
+            .add_endpoint(sample_endpoint("alpha", 1, "http://alpha"))
+            .add_endpoints(vec![sample_endpoint("beta", 2, "http://beta")])
+            .build()
+            .await;
+
+        let endpoints = collector.get_endpoints().await;
+        assert_eq!(endpoints.len(), 2);
+        assert!(endpoints.iter().any(|e| e.name == "alpha"));
+        assert!(endpoints.iter().any(|e| e.name == "beta"));
+    }
+
+    #[test]
+    fn test_collector_client_accessors() {
+        let client = SubtensorClient::new(BittensorConfig::local(8));
+        let mut collector = ChallengeWeightCollector::new(client);
+        assert_eq!(collector.client().netuid(), 8);
+        collector
+            .client_mut()
+            .set_uid_overrides(vec![("hk".to_string(), 12)]);
+        let (uids, _) = collector.convert_hotkeys_to_uids(&[HotkeyWeightEntry {
+            hotkey: "hk".to_string(),
+            weight: 1.0,
+        }]);
+        assert_eq!(uids, vec![12]);
+    }
 }

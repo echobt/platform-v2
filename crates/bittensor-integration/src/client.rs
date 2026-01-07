@@ -196,4 +196,39 @@ mod tests {
         assert_eq!(client.netuid(), 9);
         assert!(!client.use_commit_reveal());
     }
+
+    #[test]
+    fn test_version_key_reflects_config() {
+        let config = BittensorConfig {
+            endpoint: "ws://node".into(),
+            netuid: 12,
+            use_commit_reveal: false,
+            version_key: 99,
+        };
+        let client = SubtensorClient::new(config.clone());
+        assert_eq!(client.version_key(), 99);
+        assert_eq!(client.netuid(), config.netuid);
+        assert_eq!(client.use_commit_reveal(), config.use_commit_reveal);
+    }
+
+    #[test]
+    fn test_get_uid_for_hotkey_uses_overrides() {
+        let mut client = SubtensorClient::new(BittensorConfig::local(2));
+        client.set_uid_overrides(vec![("hk-a".to_string(), 5), ("hk-b".to_string(), 7)]);
+
+        assert_eq!(client.get_uid_for_hotkey("hk-a"), Some(5));
+        assert_eq!(client.get_uid_for_hotkey("hk-b"), Some(7));
+        assert!(client.get_uid_for_hotkey("missing").is_none());
+    }
+
+    #[test]
+    fn test_get_uids_for_hotkeys_filters_missing() {
+        let mut client = SubtensorClient::new(BittensorConfig::local(4));
+        client.set_uid_overrides(vec![("hk".to_string(), 11)]);
+
+        let pairs = client.get_uids_for_hotkeys(&vec!["hk".to_string(), "unknown".to_string()]);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0], ("hk".to_string(), 11));
+    }
 }

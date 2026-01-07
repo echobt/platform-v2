@@ -1120,6 +1120,35 @@ mod tests {
         let _ = std::fs::remove_file(temp_dir.join(DEFAULT_COMMITS_FILE));
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_persisted_commit_state_load_returns_default_on_error() {
+        let path = std::env::temp_dir().join("commit_state_invalid.json");
+        std::fs::write(&path, "not-json").unwrap();
+
+        let loaded = PersistedCommitState::load(&path);
+        assert!(loaded.committed_epoch.is_none());
+        assert!(loaded.pending_mechanism_commits.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_pending_mechanism_commit_get_salt_handles_partial_chunk() {
+        let mut commit = sample_pending_mechanism_commit();
+        commit.salt_hex = "010203".to_string(); // 3 bytes -> last chunk has len 1
+        let salt = commit.get_salt();
+        assert_eq!(salt.len(), 2);
+        assert_eq!(salt[1], 0x03);
+    }
+
+    #[test]
+    fn test_pending_commit_v2_get_salt_handles_partial_chunk() {
+        let mut commit = sample_pending_commit_v2();
+        commit.salt_hex = "0a0b0c".to_string();
+        let salt = commit.get_salt();
+        assert_eq!(salt.len(), 2);
+        assert_eq!(salt[1], 0x0c);
+    }
 }
 
 /// Pending mechanism commit data using subtensor-compatible format (v2)

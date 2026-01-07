@@ -415,4 +415,26 @@ mod tests {
         assert_eq!(updated.stake, Stake::new(3_000_000_000));
         assert!(!updated.is_active);
     }
+
+    #[test]
+    fn test_update_state_adds_new_validator() {
+        let client = Arc::new(TokioMutex::new(SubtensorClient::new(
+            BittensorConfig::local(1),
+        )));
+        let sync = ValidatorSync::new(client, 1, 1_000_000_000);
+        let state = Arc::new(RwLock::new(ChainState::default()));
+
+        let new_hotkey = Hotkey([9u8; 32]);
+        let validators = vec![sample_metagraph_validator(
+            new_hotkey.clone(),
+            2_500_000_000,
+        )];
+
+        let result = sync.update_state(&state, validators, None);
+
+        assert_eq!(result.added, 1);
+        assert_eq!(result.total, 1);
+        let guard = state.read();
+        assert!(guard.validators.contains_key(&new_hotkey));
+    }
 }

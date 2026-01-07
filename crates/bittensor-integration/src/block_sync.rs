@@ -488,4 +488,96 @@ mod tests {
         assert!(should_break);
         assert!(rx.try_recv().is_err());
     }
+
+    #[tokio::test]
+    async fn test_handle_block_event_epoch_transition_emits_event() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        BlockSync::handle_block_event(
+            BlockEvent::EpochTransition(EpochTransition::NewEpoch {
+                old_epoch: 5,
+                new_epoch: 6,
+                block: 1234,
+            }),
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        let evt = rx.recv().await.unwrap();
+        assert!(matches!(
+            evt,
+            BlockSyncEvent::EpochTransition {
+                old_epoch: 5,
+                new_epoch: 6,
+                block: 1234
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_reveal_window_emits_open_event() {
+        let (tx, mut rx) = mpsc::channel(3);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        BlockSync::handle_block_event(
+            BlockEvent::PhaseChange {
+                block_number: 500,
+                old_phase: EpochPhase::CommitWindow,
+                new_phase: EpochPhase::RevealWindow,
+                epoch: 11,
+            },
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        let phase_event = rx.recv().await.unwrap();
+        assert!(matches!(phase_event, BlockSyncEvent::PhaseChange { .. }));
+        let reveal_event = rx.recv().await.unwrap();
+        assert!(matches!(
+            reveal_event,
+            BlockSyncEvent::RevealWindowOpen {
+                epoch: 11,
+                block: 500
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_connection_error_sets_flag() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::Evaluation));
+        let mut was_disconnected = false;
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::ConnectionError("network wobble".into()),
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(!should_break);
+        assert!(was_disconnected);
+        let evt = rx.recv().await.unwrap();
+        assert!(matches!(evt, BlockSyncEvent::Disconnected(_)));
+    }
 }
