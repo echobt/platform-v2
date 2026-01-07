@@ -38,6 +38,10 @@ pub struct ContainerConfig {
 
     /// Labels for container (challenge metadata)
     pub labels: HashMap<String, String>,
+
+    /// User to run container as (e.g., "root", "1000:1000")
+    /// If None, uses the image default
+    pub user: Option<String>,
 }
 
 /// Resource limits for containers

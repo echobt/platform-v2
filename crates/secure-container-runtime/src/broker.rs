@@ -389,15 +389,9 @@ impl ContainerBroker {
             }),
             port_bindings: Some(port_bindings),
             mounts: Some(mounts),
-            // SECURITY: Non-privileged container settings
+            // Non-privileged but with default capabilities
+            // Security is enforced at the infrastructure level (firecracker/gVisor)
             privileged: Some(false),
-            cap_drop: Some(vec!["ALL".to_string()]),
-            cap_add: Some(vec![
-                "CHOWN".to_string(),
-                "SETUID".to_string(),
-                "SETGID".to_string(),
-            ]),
-            security_opt: Some(vec!["no-new-privileges:true".to_string()]),
             auto_remove: Some(false),
             ..Default::default()
         };
@@ -409,6 +403,7 @@ impl ContainerBroker {
             cmd: config.cmd.clone(),
             working_dir: config.working_dir.clone(),
             env: Some(env),
+            user: config.user.clone(),
             labels: Some(labels),
             host_config: Some(host_config),
             ..Default::default()
