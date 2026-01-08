@@ -492,4 +492,75 @@ mod tests {
         let result = db.flush();
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_data_persistence_across_reopens() {
+        // Test that data persists after closing and reopening the database
+        let dir = tempdir().unwrap();
+        let challenge_id = ChallengeId::new();
+
+        // First session: write data
+        {
+            let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+
+            // Save an agent
+            let agent = AgentInfo::new("persistent_agent".to_string());
+            db.save_agent(&agent).unwrap();
+
+            // Save a result
+            let result =
+                EvaluationResult::new(uuid::Uuid::new_v4(), "persistent_agent".to_string(), 0.95);
+            db.save_result(&result).unwrap();
+
+            // Save KV data
+            db.kv_set("persistent_key", &"persistent_value").unwrap();
+
+            // Save metadata
+            db.set_meta("test_meta", "meta_value").unwrap();
+            db.set_version(42).unwrap();
+
+            // Explicitly flush to disk
+            db.flush().unwrap();
+
+            // Drop db to close it
+        }
+
+        // Second session: verify data persists
+        {
+            let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+
+            // Verify agent persists
+            let agent = db.get_agent("persistent_agent").unwrap();
+            assert!(agent.is_some());
+            assert_eq!(agent.unwrap().hash, "persistent_agent");
+
+            // Verify results persist
+            let results = db.get_results_for_agent("persistent_agent").unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].score, 0.95);
+
+            // Verify KV data persists
+            let value: Option<String> = db.kv_get("persistent_key").unwrap();
+            assert_eq!(value, Some("persistent_value".to_string()));
+
+            // Verify metadata persists
+            let meta = db.get_meta("test_meta").unwrap();
+            assert_eq!(meta, Some("meta_value".to_string()));
+
+            let version = db.get_version().unwrap();
+            assert_eq!(version, 42);
+        }
+
+        // Third session: verify data still persists (double check)
+        {
+            let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+
+            let agents = db.list_agents().unwrap();
+            assert_eq!(agents.len(), 1);
+            assert_eq!(agents[0].hash, "persistent_agent");
+
+            let all_results = db.get_all_results().unwrap();
+            assert_eq!(all_results.len(), 1);
+        }
+    }
 }
