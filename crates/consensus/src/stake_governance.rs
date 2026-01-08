@@ -1584,7 +1584,8 @@ mod tests {
         let gov = create_test_governance();
         gov.set_block_height(BOOTSTRAP_END_BLOCK + 1);
 
-        let (kp, _) = create_test_validator(0);
+        let (kp, stake) = create_test_validator(0);
+        gov.update_validator_stakes(vec![stake]);
 
         let result = gov.create_proposal(
             GovernanceActionType::AddChallenge,
@@ -1688,8 +1689,9 @@ mod tests {
         gov.set_block_height(BOOTSTRAP_END_BLOCK + 1);
 
         let (kp1, stake1) = create_test_validator(1_000_000_000_000);
-        let (kp2, _) = create_test_validator(0);
-        gov.update_validator_stakes(vec![stake1]);
+        let (kp2, stake2) = create_test_validator(0);
+        // Register both validators, kp2 has zero stake
+        gov.update_validator_stakes(vec![stake1, stake2]);
 
         let proposal = gov
             .create_proposal(
@@ -1702,6 +1704,7 @@ mod tests {
             )
             .unwrap();
 
+        // kp2 is a validator but has no stake, should fail
         let result = gov.vote(proposal.id, &kp2.hotkey(), true, &kp2);
         assert!(result.is_err());
     }
@@ -1730,7 +1733,7 @@ mod tests {
         // kp2 (80% stake) votes NO
         let result = gov.vote(proposal.id, &kp2.hotkey(), false, &kp2).unwrap();
 
-        // Should be rejected due to >50% stake voting NO
+        // Should be rejected due to >33% stake voting NO (exceeds rejection threshold)
         assert!(matches!(result, StakeConsensusResult::Rejected { .. }));
     }
 
