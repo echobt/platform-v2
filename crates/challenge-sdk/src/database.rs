@@ -365,7 +365,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
 
-        // Save multiple results for same agent
+        // Save multiple results for same agent (agent1)
         let mut result1 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.70);
         result1.timestamp = chrono::Utc::now() - chrono::Duration::hours(1);
 
@@ -374,9 +374,22 @@ mod tests {
         db.save_result(&result1).unwrap();
         db.save_result(&result2).unwrap();
 
+        // Add result for a different agent (agent2)
+        let result3 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent2".to_string(), 0.80);
+        db.save_result(&result3).unwrap();
+
         let latest = db.get_latest_results().unwrap();
-        assert_eq!(latest.len(), 1);
-        assert_eq!(latest[0].score, 0.90);
+        // Should have one result per agent (agent1 and agent2)
+        assert_eq!(latest.len(), 2);
+
+        // Find results by agent
+        let agent1_result = latest.iter().find(|r| r.agent_hash == "agent1").unwrap();
+        let agent2_result = latest.iter().find(|r| r.agent_hash == "agent2").unwrap();
+
+        // Verify agent1 has the latest score (0.90, not 0.70)
+        assert_eq!(agent1_result.score, 0.90);
+        // Verify agent2 has its only score
+        assert_eq!(agent2_result.score, 0.80);
     }
 
     #[test]
