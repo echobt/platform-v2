@@ -118,7 +118,8 @@ impl StakeWeightedRoundState {
         }
         let approve_stake = self.approve_stake();
         // Require strictly more than 50% to prevent ties
-        approve_stake * 2 > total_stake
+        // Use division instead of multiplication to avoid overflow with large stake values
+        approve_stake > total_stake / 2
     }
 
     /// Check if rejection is certain (>50% reject stake)
@@ -127,7 +128,8 @@ impl StakeWeightedRoundState {
             return false;
         }
         let reject_stake = self.reject_stake();
-        reject_stake * 2 > total_stake
+        // Use division instead of multiplication to avoid overflow with large stake values
+        reject_stake > total_stake / 2
     }
 
     /// Get vote count (for logging)
