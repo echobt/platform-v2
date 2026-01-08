@@ -90,3 +90,46 @@ impl From<std::io::Error> for ChallengeError {
         ChallengeError::Internal(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_sled_error() {
+        let sled_err = sled::Error::Unsupported("test".to_string());
+        let challenge_err: ChallengeError = sled_err.into();
+        assert!(matches!(challenge_err, ChallengeError::Database(_)));
+    }
+
+    #[test]
+    fn test_from_bincode_error() {
+        let bincode_err = bincode::Error::new(bincode::ErrorKind::Custom("test error".to_string()));
+        let challenge_err: ChallengeError = bincode_err.into();
+        assert!(matches!(challenge_err, ChallengeError::Serialization(_)));
+    }
+
+    #[test]
+    fn test_from_serde_json_error() {
+        let json_str = "{invalid json}";
+        let json_err = serde_json::from_str::<serde_json::Value>(json_str).unwrap_err();
+        let challenge_err: ChallengeError = json_err.into();
+        assert!(matches!(challenge_err, ChallengeError::Serialization(_)));
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let challenge_err: ChallengeError = io_err.into();
+        assert!(matches!(challenge_err, ChallengeError::Internal(_)));
+    }
+
+    #[test]
+    fn test_error_display() {
+        let err = ChallengeError::Database("connection failed".to_string());
+        assert_eq!(err.to_string(), "Database error: connection failed");
+
+        let err = ChallengeError::Evaluation("failed to evaluate".to_string());
+        assert_eq!(err.to_string(), "Evaluation error: failed to evaluate");
+    }
+}

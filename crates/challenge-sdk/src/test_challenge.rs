@@ -143,4 +143,120 @@ mod tests {
         let result = challenge.validate(req).await.unwrap();
         assert!(!result.valid);
     }
+
+    #[test]
+    fn test_simple_challenge_with_id() {
+        let challenge = SimpleTestChallenge::new("Test").with_id("custom-id");
+
+        assert_eq!(challenge.challenge_id(), "custom-id");
+    }
+
+    #[test]
+    fn test_simple_challenge_challenge_id() {
+        let challenge = SimpleTestChallenge::default();
+        assert_eq!(challenge.challenge_id(), "simple-test-challenge");
+    }
+
+    #[test]
+    fn test_simple_challenge_name() {
+        let challenge = SimpleTestChallenge::new("My Test Challenge");
+        assert_eq!(challenge.name(), "My Test Challenge");
+    }
+
+    #[test]
+    fn test_simple_challenge_version() {
+        let challenge = SimpleTestChallenge::default();
+        assert_eq!(challenge.version(), "0.1.0");
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_with_zero_bonus() {
+        let challenge = SimpleTestChallenge::default();
+
+        let req = EvaluationRequest {
+            request_id: "test-456".to_string(),
+            submission_id: "sub-456".to_string(),
+            participant_id: "participant-2".to_string(),
+            data: json!({"bonus": 0.0}),
+            metadata: None,
+            epoch: 1,
+            deadline: None,
+        };
+
+        let result = challenge.evaluate(req).await.unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.score, 0.5); // base score only
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_with_max_bonus() {
+        let challenge = SimpleTestChallenge::default();
+
+        let req = EvaluationRequest {
+            request_id: "test-789".to_string(),
+            submission_id: "sub-789".to_string(),
+            participant_id: "participant-3".to_string(),
+            data: json!({"bonus": 0.5}),
+            metadata: None,
+            epoch: 1,
+            deadline: None,
+        };
+
+        let result = challenge.evaluate(req).await.unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.score, 1.0); // base + max bonus
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_with_excessive_bonus() {
+        let challenge = SimpleTestChallenge::default();
+
+        let req = EvaluationRequest {
+            request_id: "test-999".to_string(),
+            submission_id: "sub-999".to_string(),
+            participant_id: "participant-4".to_string(),
+            data: json!({"bonus": 1.0}), // More than max 0.5
+            metadata: None,
+            epoch: 1,
+            deadline: None,
+        };
+
+        let result = challenge.evaluate(req).await.unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.score, 1.0); // Clamped to 1.0
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_without_bonus() {
+        let challenge = SimpleTestChallenge::default();
+
+        let req = EvaluationRequest {
+            request_id: "test-000".to_string(),
+            submission_id: "sub-000".to_string(),
+            participant_id: "participant-5".to_string(),
+            data: json!({"other_field": "value"}),
+            metadata: None,
+            epoch: 1,
+            deadline: None,
+        };
+
+        let result = challenge.evaluate(req).await.unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.score, 0.5); // base score only, no bonus field
+    }
+
+    #[tokio::test]
+    async fn test_validate_with_null_data() {
+        let challenge = SimpleTestChallenge::default();
+
+        let req = ValidationRequest { data: json!(null) };
+
+        let result = challenge.validate(req).await.unwrap();
+        assert!(!result.valid);
+        assert!(!result.errors.is_empty());
+    }
 }

@@ -523,6 +523,130 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_routes_manifest_new() {
+        let manifest = RoutesManifest::new("Test Challenge", "1.0.0");
+        assert_eq!(manifest.name, "test-challenge"); // normalized
+        assert_eq!(manifest.version, "1.0.0");
+        assert!(manifest.routes.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_name() {
+        assert_eq!(
+            RoutesManifest::normalize_name("Test Challenge"),
+            "test-challenge"
+        );
+        assert_eq!(
+            RoutesManifest::normalize_name("Test_Challenge"),
+            "test-challenge"
+        );
+        assert_eq!(
+            RoutesManifest::normalize_name("Test-Challenge-123"),
+            "test-challenge-123"
+        );
+        assert_eq!(RoutesManifest::normalize_name("-test-"), "test");
+        // Multiple spaces get replaced with multiple dashes (no collapsing)
+        assert_eq!(
+            RoutesManifest::normalize_name("Test  Challenge"),
+            "test--challenge"
+        );
+    }
+
+    #[test]
+    fn test_routes_manifest_with_description() {
+        let manifest = RoutesManifest::new("test", "1.0").with_description("A test challenge");
+        assert_eq!(manifest.description, "A test challenge");
+    }
+
+    #[test]
+    fn test_routes_manifest_add_route() {
+        let route = ChallengeRoute::get("/test", "Test route");
+        let manifest = RoutesManifest::new("test", "1.0").add_route(route.clone());
+
+        assert_eq!(manifest.routes.len(), 1);
+        assert_eq!(manifest.routes[0].path, "/test");
+    }
+
+    #[test]
+    fn test_routes_manifest_with_routes() {
+        let routes = vec![
+            ChallengeRoute::get("/route1", "Route 1"),
+            ChallengeRoute::post("/route2", "Route 2"),
+        ];
+
+        let manifest = RoutesManifest::new("test", "1.0").with_routes(routes);
+        assert_eq!(manifest.routes.len(), 2);
+    }
+
+    #[test]
+    fn test_routes_manifest_with_metadata() {
+        let manifest = RoutesManifest::new("test", "1.0")
+            .with_metadata("author", serde_json::json!("John Doe"))
+            .with_metadata("license", serde_json::json!("MIT"));
+
+        assert_eq!(manifest.metadata.len(), 2);
+        assert_eq!(
+            manifest.metadata.get("author"),
+            Some(&serde_json::json!("John Doe"))
+        );
+    }
+
+    #[test]
+    fn test_routes_manifest_with_standard_routes() {
+        let manifest = RoutesManifest::new("test", "1.0").with_standard_routes();
+
+        assert!(manifest.routes.len() >= 6);
+        assert!(manifest.routes.iter().any(|r| r.path == "/submit"));
+        assert!(manifest.routes.iter().any(|r| r.path == "/leaderboard"));
+        assert!(manifest.routes.iter().any(|r| r.path == "/health"));
+    }
+
+    #[test]
+    fn test_http_method_display() {
+        assert_eq!(format!("{}", HttpMethod::Get), "GET");
+        assert_eq!(format!("{}", HttpMethod::Post), "POST");
+        assert_eq!(format!("{}", HttpMethod::Put), "PUT");
+        assert_eq!(format!("{}", HttpMethod::Delete), "DELETE");
+        assert_eq!(format!("{}", HttpMethod::Patch), "PATCH");
+    }
+
+    #[test]
+    fn test_http_method_as_str() {
+        assert_eq!(HttpMethod::Get.as_str(), "GET");
+        assert_eq!(HttpMethod::Post.as_str(), "POST");
+        assert_eq!(HttpMethod::Put.as_str(), "PUT");
+        assert_eq!(HttpMethod::Delete.as_str(), "DELETE");
+        assert_eq!(HttpMethod::Patch.as_str(), "PATCH");
+    }
+
+    #[test]
+    fn test_challenge_route_put() {
+        let route = ChallengeRoute::put("/update", "Update resource");
+        assert_eq!(route.method, HttpMethod::Put);
+        assert_eq!(route.path, "/update");
+        assert_eq!(route.description, "Update resource");
+    }
+
+    #[test]
+    fn test_challenge_route_delete() {
+        let route = ChallengeRoute::delete("/remove", "Remove resource");
+        assert_eq!(route.method, HttpMethod::Delete);
+        assert_eq!(route.path, "/remove");
+    }
+
+    #[test]
+    fn test_challenge_route_with_auth() {
+        let route = ChallengeRoute::get("/private", "Private route").with_auth();
+        assert!(route.requires_auth);
+    }
+
+    #[test]
+    fn test_challenge_route_with_rate_limit() {
+        let route = ChallengeRoute::post("/submit", "Submit").with_rate_limit(10);
+        assert_eq!(route.rate_limit, 10);
+    }
+
+    #[test]
     fn test_route_matching() {
         let route = ChallengeRoute::get("/agent/:hash", "Get agent");
 
@@ -539,6 +663,176 @@ mod tests {
     }
 
     #[test]
+    fn test_route_request_new() {
+        let req = RouteRequest::new("GET", "/test");
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, "/test");
+        assert!(req.params.is_empty());
+        assert!(req.query.is_empty());
+    }
+
+    #[test]
+    fn test_route_request_with_params() {
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "123".to_string());
+
+        let req = RouteRequest::new("GET", "/test").with_params(params);
+        assert_eq!(req.param("id"), Some("123"));
+    }
+
+    #[test]
+    fn test_route_request_with_query() {
+        let mut query = HashMap::new();
+        query.insert("limit".to_string(), "10".to_string());
+
+        let req = RouteRequest::new("GET", "/test").with_query(query);
+        assert_eq!(req.query_param("limit"), Some("10"));
+    }
+
+    #[test]
+    fn test_route_request_with_body() {
+        let body = serde_json::json!({"key": "value"});
+        let req = RouteRequest::new("POST", "/test").with_body(body.clone());
+        assert_eq!(req.body, body);
+    }
+
+    #[test]
+    fn test_route_request_with_auth() {
+        let req = RouteRequest::new("GET", "/test").with_auth("hotkey123".to_string());
+        assert_eq!(req.auth_hotkey, Some("hotkey123".to_string()));
+    }
+
+    #[test]
+    fn test_route_request_param() {
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "abc".to_string());
+
+        let req = RouteRequest::new("GET", "/test").with_params(params);
+        assert_eq!(req.param("id"), Some("abc"));
+        assert_eq!(req.param("missing"), None);
+    }
+
+    #[test]
+    fn test_route_request_query_param() {
+        let mut query = HashMap::new();
+        query.insert("page".to_string(), "2".to_string());
+
+        let req = RouteRequest::new("GET", "/test").with_query(query);
+        assert_eq!(req.query_param("page"), Some("2"));
+        assert_eq!(req.query_param("missing"), None);
+    }
+
+    #[test]
+    fn test_route_request_parse_body() {
+        #[derive(serde::Deserialize)]
+        struct TestData {
+            value: i32,
+        }
+
+        let body = serde_json::json!({"value": 42});
+        let req = RouteRequest::new("POST", "/test").with_body(body);
+
+        let parsed: TestData = req.parse_body().unwrap();
+        assert_eq!(parsed.value, 42);
+    }
+
+    #[test]
+    fn test_route_response_ok() {
+        let resp = RouteResponse::ok(serde_json::json!({"status": "ok"}));
+        assert_eq!(resp.status, 200);
+        assert!(resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_created() {
+        let resp = RouteResponse::created(serde_json::json!({"id": "123"}));
+        assert_eq!(resp.status, 201);
+        assert!(resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_no_content() {
+        let resp = RouteResponse::no_content();
+        assert_eq!(resp.status, 204);
+        assert!(resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_unauthorized() {
+        let resp = RouteResponse::unauthorized();
+        assert_eq!(resp.status, 401);
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_forbidden() {
+        let resp = RouteResponse::forbidden("Access denied");
+        assert_eq!(resp.status, 403);
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_rate_limited() {
+        let resp = RouteResponse::rate_limited();
+        assert_eq!(resp.status, 429);
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_internal_error() {
+        let resp = RouteResponse::internal_error("Something went wrong");
+        assert_eq!(resp.status, 500);
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn test_route_response_with_header() {
+        let resp = RouteResponse::ok(serde_json::json!({})).with_header("X-Custom", "value");
+
+        assert_eq!(resp.headers.get("X-Custom"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_route_response_is_success() {
+        assert!(RouteResponse::ok(serde_json::json!({})).is_success());
+        assert!(RouteResponse::created(serde_json::json!({})).is_success());
+        assert!(!RouteResponse::bad_request("error").is_success());
+        assert!(!RouteResponse::not_found().is_success());
+    }
+
+    #[test]
+    fn test_route_registry_register_all() {
+        let mut registry = RouteRegistry::new();
+        let routes = vec![
+            ChallengeRoute::get("/a", "Route A"),
+            ChallengeRoute::post("/b", "Route B"),
+        ];
+
+        registry.register_all(routes);
+        assert_eq!(registry.routes().len(), 2);
+    }
+
+    #[test]
+    fn test_route_registry_routes() {
+        let mut registry = RouteRegistry::new();
+        registry.register(ChallengeRoute::get("/test", "Test"));
+
+        let routes = registry.routes();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].path, "/test");
+    }
+
+    #[test]
+    fn test_route_registry_is_empty() {
+        let registry = RouteRegistry::new();
+        assert!(registry.is_empty());
+
+        let mut registry = RouteRegistry::new();
+        registry.register(ChallengeRoute::get("/test", "Test"));
+        assert!(!registry.is_empty());
+    }
+
+    #[test]
     fn test_route_builder() {
         let routes = RouteBuilder::new()
             .get("/leaderboard", "Get leaderboard")
@@ -550,7 +844,40 @@ mod tests {
     }
 
     #[test]
-    fn test_route_registry() {
+    fn test_route_builder_default() {
+        let builder = RouteBuilder::default();
+        let routes = builder.build();
+        assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn test_route_builder_put() {
+        let routes = RouteBuilder::new()
+            .put("/update/:id", "Update item")
+            .build();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].method, HttpMethod::Put);
+    }
+
+    #[test]
+    fn test_route_builder_delete() {
+        let routes = RouteBuilder::new()
+            .delete("/remove/:id", "Remove item")
+            .build();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].method, HttpMethod::Delete);
+    }
+
+    #[test]
+    fn test_route_registry_new() {
+        let registry = RouteRegistry::new();
+        assert!(registry.routes.is_empty());
+    }
+
+    #[test]
+    fn test_route_registry_register() {
         let mut registry = RouteRegistry::new();
         registry.register(ChallengeRoute::get("/test", "Test"));
         registry.register(ChallengeRoute::get("/user/:id", "Get user"));

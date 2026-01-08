@@ -395,6 +395,7 @@ impl Default for DataQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_data_key_spec() {
@@ -411,6 +412,37 @@ mod tests {
     }
 
     #[test]
+    fn test_challenge_scoped() {
+        let spec = DataKeySpec::new("leaderboard").challenge_scoped();
+        assert_eq!(spec.scope, DataScope::Challenge);
+    }
+
+    #[test]
+    fn test_global_scoped() {
+        let spec = DataKeySpec::new("global_config").global_scoped();
+        assert_eq!(spec.scope, DataScope::Global);
+    }
+
+    #[test]
+    fn test_with_schema() {
+        let schema = json!({"type": "number", "minimum": 0});
+        let spec = DataKeySpec::new("score").with_schema(schema.clone());
+        assert_eq!(spec.schema, Some(schema));
+    }
+
+    #[test]
+    fn test_no_consensus() {
+        let spec = DataKeySpec::new("local_data").no_consensus();
+        assert!(!spec.requires_consensus);
+    }
+
+    #[test]
+    fn test_min_consensus() {
+        let spec = DataKeySpec::new("important_data").min_consensus(5);
+        assert_eq!(spec.min_consensus, 5);
+    }
+
+    #[test]
     fn test_data_verification() {
         let accept = DataVerification::accept();
         assert!(accept.accepted);
@@ -418,6 +450,35 @@ mod tests {
         let reject = DataVerification::reject("Bad data");
         assert!(!reject.accepted);
         assert_eq!(reject.reason, Some("Bad data".to_string()));
+    }
+
+    #[test]
+    fn test_accept_with_transform() {
+        let transformed = vec![4, 5, 6];
+        let verification = DataVerification::accept_with_transform(transformed.clone());
+        assert!(verification.accepted);
+        assert_eq!(verification.transformed_value, Some(transformed));
+    }
+
+    #[test]
+    fn test_with_ttl() {
+        let verification = DataVerification::accept().with_ttl(500);
+        assert_eq!(verification.ttl_override, Some(500));
+    }
+
+    #[test]
+    fn test_with_event() {
+        let event = DataEvent::new("update", json!({"key": "value"}));
+        let verification = DataVerification::accept().with_event(event.clone());
+        assert_eq!(verification.events.len(), 1);
+        assert_eq!(verification.events[0].event_type, "update");
+    }
+
+    #[test]
+    fn test_data_event_new() {
+        let event = DataEvent::new("test_event", json!({"data": 123}));
+        assert_eq!(event.event_type, "test_event");
+        assert_eq!(event.data, json!({"data": 123}));
     }
 
     #[test]
@@ -429,5 +490,129 @@ mod tests {
         assert_eq!(sub.key, "score");
         assert_eq!(sub.block_height, 100);
         assert_eq!(sub.epoch, 5);
+    }
+
+    #[test]
+    fn test_data_submission_with_metadata() {
+        let sub = DataSubmission::new("score", vec![1, 2, 3], "validator1")
+            .with_metadata("source", json!("test"));
+
+        assert_eq!(sub.metadata.get("source"), Some(&json!("test")));
+    }
+
+    #[test]
+    fn test_value_json() {
+        let data = json!({"score": 85});
+        let json_str = serde_json::to_vec(&data).unwrap();
+        let sub = DataSubmission::new("score", json_str, "validator1");
+
+        let parsed: serde_json::Value = sub.value_json().unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    fn test_value_string() {
+        let text = "Hello, World!";
+        let sub = DataSubmission::new("message", text.as_bytes().to_vec(), "validator1");
+
+        let parsed = sub.value_string().unwrap();
+        assert_eq!(parsed, text);
+    }
+
+    #[test]
+    fn test_stored_data_is_expired() {
+        let stored = StoredData {
+            key: "test".to_string(),
+            value: vec![1, 2, 3],
+            scope: DataScope::Validator,
+            validator: Some("validator1".to_string()),
+            stored_at_block: 100,
+            expires_at_block: Some(200),
+            version: 1,
+        };
+
+        assert!(!stored.is_expired(150));
+        assert!(stored.is_expired(200));
+        assert!(stored.is_expired(250));
+
+        // Test permanent storage (no expiry)
+        let permanent = StoredData {
+            expires_at_block: None,
+            ..stored
+        };
+        assert!(!permanent.is_expired(1000000));
+    }
+
+    #[test]
+    fn test_stored_data_value_json() {
+        let data = json!({"result": "success"});
+        let json_bytes = serde_json::to_vec(&data).unwrap();
+
+        let stored = StoredData {
+            key: "result".to_string(),
+            value: json_bytes,
+            scope: DataScope::Challenge,
+            validator: None,
+            stored_at_block: 100,
+            expires_at_block: None,
+            version: 1,
+        };
+
+        let parsed: serde_json::Value = stored.value_json().unwrap();
+        assert_eq!(parsed, data);
+    }
+
+    #[test]
+    fn test_data_query_new() {
+        let query = DataQuery::new();
+        assert!(query.key_pattern.is_none());
+        assert!(query.scope.is_none());
+        assert!(query.validator.is_none());
+        assert!(!query.include_expired);
+        assert!(query.limit.is_none());
+        assert!(query.offset.is_none());
+    }
+
+    #[test]
+    fn test_data_query_key() {
+        let query = DataQuery::new().key("score*");
+        assert_eq!(query.key_pattern, Some("score*".to_string()));
+    }
+
+    #[test]
+    fn test_data_query_scope() {
+        let query = DataQuery::new().scope(DataScope::Challenge);
+        assert_eq!(query.scope, Some(DataScope::Challenge));
+    }
+
+    #[test]
+    fn test_data_query_validator() {
+        let query = DataQuery::new().validator("validator1");
+        assert_eq!(query.validator, Some("validator1".to_string()));
+    }
+
+    #[test]
+    fn test_data_query_include_expired() {
+        let query = DataQuery::new().include_expired();
+        assert!(query.include_expired);
+    }
+
+    #[test]
+    fn test_data_query_limit() {
+        let query = DataQuery::new().limit(50);
+        assert_eq!(query.limit, Some(50));
+    }
+
+    #[test]
+    fn test_data_query_offset() {
+        let query = DataQuery::new().offset(100);
+        assert_eq!(query.offset, Some(100));
+    }
+
+    #[test]
+    fn test_data_query_default() {
+        let query = DataQuery::default();
+        assert!(query.key_pattern.is_none());
+        assert!(!query.include_expired);
     }
 }

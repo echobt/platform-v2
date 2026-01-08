@@ -369,4 +369,167 @@ mod tests {
         let different_hash = EncryptedSubmission::compute_content_hash(different_data);
         assert_ne!(content_hash, different_hash);
     }
+
+    #[test]
+    fn test_compute_signature_message() {
+        let content_hash: [u8; 32] = [1; 32];
+        let hotkey = "test_hotkey";
+        let epoch = 42u64;
+
+        let msg = EncryptedSubmission::compute_signature_message(&content_hash, hotkey, epoch);
+
+        // Should contain all components
+        assert!(msg.len() > 32); // at least content_hash + something
+        assert!(msg.starts_with(&content_hash));
+
+        // Should be deterministic
+        let msg2 = EncryptedSubmission::compute_signature_message(&content_hash, hotkey, epoch);
+        assert_eq!(msg, msg2);
+
+        // Different inputs should produce different messages
+        let msg3 =
+            EncryptedSubmission::compute_signature_message(&content_hash, "other_hotkey", epoch);
+        assert_ne!(msg, msg3);
+    }
+
+    #[test]
+    fn test_hash_hex() {
+        let key = generate_key();
+        let nonce = generate_nonce();
+        let key_hash = hash_key(&key);
+        let data = b"test";
+        let content_hash = EncryptedSubmission::compute_content_hash(data);
+        let encrypted = encrypt_data(data, &key, &nonce).unwrap();
+
+        let submission = EncryptedSubmission::new(
+            "challenge-1".to_string(),
+            "miner".to_string(),
+            "coldkey".to_string(),
+            encrypted,
+            key_hash,
+            nonce,
+            content_hash,
+            vec![],
+            1,
+        );
+
+        let hex = submission.hash_hex();
+        assert_eq!(hex.len(), 64); // 32 bytes = 64 hex chars
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_content_hash_hex() {
+        let key = generate_key();
+        let nonce = generate_nonce();
+        let key_hash = hash_key(&key);
+        let data = b"test";
+        let content_hash = EncryptedSubmission::compute_content_hash(data);
+        let encrypted = encrypt_data(data, &key, &nonce).unwrap();
+
+        let submission = EncryptedSubmission::new(
+            "challenge-1".to_string(),
+            "miner".to_string(),
+            "coldkey".to_string(),
+            encrypted,
+            key_hash,
+            nonce,
+            content_hash,
+            vec![],
+            1,
+        );
+
+        let hex = submission.content_hash_hex();
+        assert_eq!(hex.len(), 64);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_submission_ack_new() {
+        use platform_core::Hotkey;
+
+        let hash: [u8; 32] = [2; 32];
+        let hotkey = Hotkey::from_bytes(&[3; 32]).unwrap();
+        let stake = 1000u64;
+        let signature = vec![4, 5, 6];
+
+        let ack = SubmissionAck::new(hash, hotkey.clone(), stake, signature.clone());
+
+        assert_eq!(ack.submission_hash, hash);
+        assert_eq!(ack.validator_hotkey, hotkey);
+        assert_eq!(ack.validator_stake, stake);
+        assert_eq!(ack.signature, signature);
+    }
+
+    #[test]
+    fn test_submission_ack_hash_hex() {
+        use platform_core::Hotkey;
+
+        let hash: [u8; 32] = [7; 32];
+        let hotkey = Hotkey::from_bytes(&[8; 32]).unwrap();
+
+        let ack = SubmissionAck::new(hash, hotkey, 500, vec![]);
+        let hex = ack.submission_hash_hex();
+
+        assert_eq!(hex.len(), 64);
+        assert_eq!(
+            hex,
+            "0707070707070707070707070707070707070707070707070707070707070707"
+        );
+    }
+
+    #[test]
+    fn test_decryption_key_reveal_new() {
+        let hash: [u8; 32] = [9; 32];
+        let key = vec![10, 11, 12];
+        let signature = vec![13, 14, 15];
+
+        let reveal = DecryptionKeyReveal::new(hash, key.clone(), signature.clone());
+
+        assert_eq!(reveal.submission_hash, hash);
+        assert_eq!(reveal.decryption_key, key);
+        assert_eq!(reveal.miner_signature, signature);
+    }
+
+    #[test]
+    fn test_decryption_key_reveal_verify() {
+        let key = generate_key();
+        let key_hash = hash_key(&key);
+
+        let reveal = DecryptionKeyReveal::new([0; 32], key.to_vec(), vec![]);
+
+        // Should verify against correct hash
+        assert!(reveal.verify_key_hash(&key_hash));
+
+        // Should not verify against wrong hash
+        let wrong_hash: [u8; 32] = [255; 32];
+        assert!(!reveal.verify_key_hash(&wrong_hash));
+    }
+
+    #[test]
+    fn test_decrypt_invalid_key_length() {
+        let nonce = generate_nonce();
+        let data = b"test";
+        let key32 = generate_key();
+        let encrypted = encrypt_data(data, &key32, &nonce).unwrap();
+
+        // Try to decrypt with wrong key length
+        let short_key = vec![1, 2, 3]; // Only 3 bytes
+        let result = decrypt_data(&encrypted, &short_key, &nonce);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SubmissionError::InvalidKey));
+    }
+
+    #[test]
+    fn test_submission_error_variants() {
+        let err = SubmissionError::MinerBanned;
+        assert_eq!(err.to_string(), "Miner is banned");
+
+        let err = SubmissionError::QuorumNotReached;
+        assert_eq!(err.to_string(), "Quorum not reached");
+
+        let err = SubmissionError::DuplicateContent;
+        assert!(err.to_string().contains("Duplicate"));
+    }
 }
