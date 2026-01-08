@@ -112,4 +112,105 @@ mod tests {
         let weights = scores_to_weights(&scores);
         assert!(weights.is_empty());
     }
+
+    #[test]
+    fn test_scores_to_weights_zero_total() {
+        // When total score is 0 or negative, should return empty vec
+        let scores = vec![("hotkey1".to_string(), 0.0), ("hotkey2".to_string(), 0.0)];
+
+        let weights = scores_to_weights(&scores);
+        assert!(weights.is_empty());
+    }
+
+    #[test]
+    fn test_scores_to_weights_negative_total() {
+        // When total score is negative (shouldn't happen but test edge case)
+        let scores = vec![("hotkey1".to_string(), -1.0), ("hotkey2".to_string(), -2.0)];
+
+        let weights = scores_to_weights(&scores);
+        assert!(weights.is_empty());
+    }
+
+    #[test]
+    fn test_create_commitment() {
+        let weights = vec![
+            WeightAssignment::new("hotkey1".to_string(), 0.6),
+            WeightAssignment::new("hotkey2".to_string(), 0.4),
+        ];
+        let secret = b"my_secret_key_123";
+
+        let commitment = create_commitment(&weights, secret);
+
+        // Should be a valid hex string (64 chars for SHA256)
+        assert_eq!(commitment.len(), 64);
+        assert!(commitment.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Same inputs should produce same commitment
+        let commitment2 = create_commitment(&weights, secret);
+        assert_eq!(commitment, commitment2);
+    }
+
+    #[test]
+    fn test_create_commitment_different_secrets() {
+        let weights = vec![WeightAssignment::new("hotkey1".to_string(), 0.5)];
+
+        let commitment1 = create_commitment(&weights, b"secret1");
+        let commitment2 = create_commitment(&weights, b"secret2");
+
+        // Different secrets should produce different commitments
+        assert_ne!(commitment1, commitment2);
+    }
+
+    #[test]
+    fn test_create_commitment_order_independence() {
+        // Weights should be sorted before hashing, so order doesn't matter
+        let weights1 = vec![
+            WeightAssignment::new("hotkey_a".to_string(), 0.5),
+            WeightAssignment::new("hotkey_b".to_string(), 0.5),
+        ];
+
+        let weights2 = vec![
+            WeightAssignment::new("hotkey_b".to_string(), 0.5),
+            WeightAssignment::new("hotkey_a".to_string(), 0.5),
+        ];
+
+        let commitment1 = create_commitment(&weights1, b"secret");
+        let commitment2 = create_commitment(&weights2, b"secret");
+
+        assert_eq!(commitment1, commitment2);
+    }
+
+    #[test]
+    fn test_normalize_weights_zero_total() {
+        // When weights sum to 0, should return them unchanged
+        let weights = vec![
+            WeightAssignment {
+                hotkey: "hotkey1".to_string(),
+                weight: 0.0,
+            },
+            WeightAssignment {
+                hotkey: "hotkey2".to_string(),
+                weight: 0.0,
+            },
+        ];
+
+        let normalized = normalize_weights(weights.clone());
+
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized[0].weight, 0.0);
+        assert_eq!(normalized[1].weight, 0.0);
+    }
+
+    #[test]
+    fn test_normalize_weights_single() {
+        let weights = vec![WeightAssignment {
+            hotkey: "hotkey1".to_string(),
+            weight: 5.0,
+        }];
+
+        let normalized = normalize_weights(weights);
+
+        assert_eq!(normalized.len(), 1);
+        assert!((normalized[0].weight - 1.0).abs() < 0.001);
+    }
 }

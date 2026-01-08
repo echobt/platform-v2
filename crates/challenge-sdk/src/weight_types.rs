@@ -147,3 +147,26 @@ impl Default for WeightConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_weight_config_default() {
+        let config = WeightConfig::default();
+        assert_eq!(config.min_validators, 3);
+        assert_eq!(config.min_stake_percentage, 0.3);
+        assert_eq!(config.outlier_zscore_threshold, 2.5);
+        assert_eq!(config.max_variance_threshold, 0.15);
+        assert_eq!(config.improvement_threshold, 0.02);
+        assert_eq!(config.min_score_threshold, 0.01);
+    }
+
+    #[test]
+    fn test_weight_config_clone() {
+        let config = WeightConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config.min_validators, cloned.min_validators);
+    }
+}

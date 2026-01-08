@@ -295,6 +295,15 @@ mod tests {
     }
 
     #[test]
+    fn test_challenge_id() {
+        let dir = tempdir().unwrap();
+        let challenge_id = ChallengeId::new();
+        let db = ChallengeDatabase::open(dir.path(), challenge_id).unwrap();
+
+        assert_eq!(db.challenge_id(), challenge_id);
+    }
+
+    #[test]
     fn test_agent_storage() {
         let dir = tempdir().unwrap();
         let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
@@ -305,6 +314,21 @@ mod tests {
         let loaded = db.get_agent("test_hash_123").unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().hash, "test_hash_123");
+    }
+
+    #[test]
+    fn test_list_agents() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        let agent1 = AgentInfo::new("hash1".to_string());
+        let agent2 = AgentInfo::new("hash2".to_string());
+
+        db.save_agent(&agent1).unwrap();
+        db.save_agent(&agent2).unwrap();
+
+        let agents = db.list_agents().unwrap();
+        assert_eq!(agents.len(), 2);
     }
 
     #[test]
@@ -322,6 +346,40 @@ mod tests {
     }
 
     #[test]
+    fn test_get_all_results() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        let result1 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.85);
+        let result2 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent2".to_string(), 0.90);
+
+        db.save_result(&result1).unwrap();
+        db.save_result(&result2).unwrap();
+
+        let results = db.get_all_results().unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_get_latest_results() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        // Save multiple results for same agent
+        let mut result1 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.70);
+        result1.timestamp = chrono::Utc::now() - chrono::Duration::hours(1);
+
+        let result2 = EvaluationResult::new(uuid::Uuid::new_v4(), "agent1".to_string(), 0.90);
+
+        db.save_result(&result1).unwrap();
+        db.save_result(&result2).unwrap();
+
+        let latest = db.get_latest_results().unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].score, 0.90);
+    }
+
+    #[test]
     fn test_kv_store() {
         let dir = tempdir().unwrap();
         let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
@@ -330,5 +388,108 @@ mod tests {
 
         let value: Option<i32> = db.kv_get("my_key").unwrap();
         assert_eq!(value, Some(42));
+    }
+
+    #[test]
+    fn test_kv_delete() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        db.kv_set("key_to_delete", &"value").unwrap();
+
+        let deleted = db.kv_delete("key_to_delete").unwrap();
+        assert!(deleted);
+
+        let value: Option<String> = db.kv_get("key_to_delete").unwrap();
+        assert!(value.is_none());
+
+        // Delete non-existent key
+        let deleted = db.kv_delete("non_existent").unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_kv_keys() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        db.kv_set("key1", &1).unwrap();
+        db.kv_set("key2", &2).unwrap();
+        db.kv_set("key3", &3).unwrap();
+
+        let keys = db.kv_keys().unwrap();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.contains(&"key1".to_string()));
+        assert!(keys.contains(&"key2".to_string()));
+        assert!(keys.contains(&"key3".to_string()));
+    }
+
+    #[test]
+    fn test_set_meta() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        db.set_meta("author", "test_author").unwrap();
+
+        let value = db.get_meta("author").unwrap();
+        assert_eq!(value, Some("test_author".to_string()));
+    }
+
+    #[test]
+    fn test_get_meta() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        let value = db.get_meta("non_existent").unwrap();
+        assert!(value.is_none());
+
+        db.set_meta("key", "value").unwrap();
+        let value = db.get_meta("key").unwrap();
+        assert_eq!(value, Some("value".to_string()));
+    }
+
+    #[test]
+    fn test_get_version() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        // Should return 0 for new database
+        let version = db.get_version().unwrap();
+        assert_eq!(version, 0);
+    }
+
+    #[test]
+    fn test_set_version() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        db.set_version(5).unwrap();
+
+        let version = db.get_version().unwrap();
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn test_open_tree() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        let custom_tree = db.open_tree("custom_data").unwrap();
+
+        custom_tree.insert(b"key", b"value").unwrap();
+        let value = custom_tree.get(b"key").unwrap();
+        assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(b"value".as_ref()));
+    }
+
+    #[test]
+    fn test_flush() {
+        let dir = tempdir().unwrap();
+        let db = ChallengeDatabase::open(dir.path(), ChallengeId::new()).unwrap();
+
+        db.kv_set("test_key", &"test_value").unwrap();
+
+        // Flush should succeed
+        let result = db.flush();
+        assert!(result.is_ok());
     }
 }

@@ -454,3 +454,258 @@ pub async fn run_as_client<C: ServerChallenge + 'static>(
     let mut client = PlatformClient::new(config, challenge);
     client.run().await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::{ServerChallenge, ValidationRequest, ValidationResponse};
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    // Mock challenge for testing
+    struct TestChallenge;
+
+    #[async_trait]
+    impl ServerChallenge for TestChallenge {
+        fn challenge_id(&self) -> &str {
+            "test-challenge"
+        }
+
+        fn name(&self) -> &str {
+            "Test Challenge"
+        }
+
+        fn version(&self) -> &str {
+            "1.0.0"
+        }
+
+        async fn evaluate(
+            &self,
+            request: EvaluationRequest,
+        ) -> Result<EvaluationResponse, ChallengeError> {
+            Ok(EvaluationResponse::success(
+                &request.request_id,
+                0.5,
+                json!({}),
+            ))
+        }
+    }
+
+    #[test]
+    fn test_connection_state_variants() {
+        // Test that all connection states are different
+        assert_ne!(ConnectionState::Disconnected, ConnectionState::Connecting);
+        assert_ne!(ConnectionState::Connecting, ConnectionState::Connected);
+        assert_ne!(ConnectionState::Connected, ConnectionState::Reconnecting);
+        assert_ne!(
+            ConnectionState::Authenticating,
+            ConnectionState::Disconnected
+        );
+    }
+
+    #[test]
+    fn test_platform_client_config_new() {
+        let config = PlatformClientConfig {
+            url: "ws://localhost:8000/ws".to_string(),
+            challenge_id: "test-challenge".to_string(),
+            auth_token: "test-token".to_string(),
+            instance_id: Some("instance-1".to_string()),
+            reconnect_delay: Duration::from_secs(5),
+            max_reconnect_attempts: 10,
+        };
+
+        assert_eq!(config.url, "ws://localhost:8000/ws");
+        assert_eq!(config.challenge_id, "test-challenge");
+        assert_eq!(config.auth_token, "test-token");
+        assert_eq!(config.instance_id, Some("instance-1".to_string()));
+        assert_eq!(config.reconnect_delay, Duration::from_secs(5));
+        assert_eq!(config.max_reconnect_attempts, 10);
+    }
+
+    #[test]
+    fn test_platform_client_creation() {
+        let config = PlatformClientConfig {
+            url: "ws://localhost:8000/ws".to_string(),
+            challenge_id: "test".to_string(),
+            auth_token: "token".to_string(),
+            instance_id: None,
+            reconnect_delay: Duration::from_secs(5),
+            max_reconnect_attempts: 10,
+        };
+
+        let challenge = TestChallenge;
+        let client = PlatformClient::new(config, challenge);
+
+        // Verify client was created successfully
+        assert_eq!(client.config.challenge_id, "test");
+    }
+
+    #[test]
+    fn test_server_message_serialization() {
+        // Test AuthResponse
+        let msg = ServerMessage::AuthResponse {
+            success: true,
+            error: None,
+            session_id: Some("session-123".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("auth_response"));
+
+        // Test Ping
+        let msg = ServerMessage::Ping {
+            timestamp: 1234567890,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("ping"));
+    }
+
+    #[test]
+    fn test_challenge_message_serialization() {
+        // Test Auth message
+        let msg = ChallengeMessage::Auth {
+            challenge_id: "test".to_string(),
+            auth_token: "token".to_string(),
+            instance_id: None,
+            version: Some("1.0.0".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("auth"));
+        assert!(json.contains("test"));
+
+        // Test Health message
+        let msg = ChallengeMessage::Health {
+            healthy: true,
+            load: 0.5,
+            pending: 2,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("health"));
+    }
+
+    #[test]
+    fn test_server_message_deserialization() {
+        // Test deserializing AuthResponse
+        let json = r#"{"type":"auth_response","data":{"success":true,"error":null,"session_id":"session-123"}}"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap();
+
+        match msg {
+            ServerMessage::AuthResponse {
+                success,
+                session_id,
+                ..
+            } => {
+                assert!(success);
+                assert_eq!(session_id, Some("session-123".to_string()));
+            }
+            _ => panic!("Expected AuthResponse"),
+        }
+    }
+
+    #[test]
+    fn test_challenge_message_deserialization() {
+        // Test deserializing Progress message
+        let json = r#"{"type":"progress","data":{"request_id":"req-123","progress":0.75,"message":"Processing"}}"#;
+        let msg: ChallengeMessage = serde_json::from_str(json).unwrap();
+
+        match msg {
+            ChallengeMessage::Progress {
+                request_id,
+                progress,
+                message,
+            } => {
+                assert_eq!(request_id, "req-123");
+                assert_eq!(progress, 0.75);
+                assert_eq!(message, Some("Processing".to_string()));
+            }
+            _ => panic!("Expected Progress"),
+        }
+    }
+
+    #[test]
+    fn test_server_message_evaluate() {
+        let eval_req = EvaluationRequest {
+            request_id: "req-1".to_string(),
+            submission_id: "sub-1".to_string(),
+            participant_id: "participant-1".to_string(),
+            data: json!({"test": "data"}),
+            metadata: None,
+            epoch: 1,
+            deadline: None,
+        };
+
+        let msg = ServerMessage::Evaluate(eval_req.clone());
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            ServerMessage::Evaluate(req) => {
+                assert_eq!(req.request_id, "req-1");
+                assert_eq!(req.submission_id, "sub-1");
+            }
+            _ => panic!("Expected Evaluate"),
+        }
+    }
+
+    #[test]
+    fn test_challenge_message_result() {
+        let eval_resp = EvaluationResponse::success("req-1", 0.95, json!({"result": "ok"}));
+
+        let msg = ChallengeMessage::Result(eval_resp.clone());
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: ChallengeMessage = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            ChallengeMessage::Result(resp) => {
+                assert_eq!(resp.request_id, "req-1");
+                assert_eq!(resp.score, 0.95);
+                assert!(resp.success);
+            }
+            _ => panic!("Expected Result"),
+        }
+    }
+
+    #[test]
+    fn test_server_message_cancel() {
+        let msg = ServerMessage::Cancel {
+            request_id: "req-123".to_string(),
+            reason: "Timeout".to_string(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("cancel"));
+        assert!(json.contains("req-123"));
+        assert!(json.contains("Timeout"));
+    }
+
+    #[test]
+    fn test_server_message_shutdown() {
+        let msg = ServerMessage::Shutdown {
+            reason: "Maintenance".to_string(),
+            restart_expected: true,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("shutdown"));
+        assert!(json.contains("Maintenance"));
+    }
+
+    #[test]
+    fn test_challenge_message_log() {
+        let msg = ChallengeMessage::Log {
+            level: "info".to_string(),
+            message: "Test log message".to_string(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("log"));
+        assert!(json.contains("info"));
+        assert!(json.contains("Test log message"));
+    }
+}

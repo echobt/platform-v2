@@ -303,6 +303,86 @@ mod tests {
     }
 
     #[test]
+    fn test_challenge_config_with_mechanism() {
+        let config = ChallengeConfig::with_mechanism(5);
+        assert_eq!(config.mechanism_id, 5);
+        assert_eq!(config.evaluation_timeout_secs, 300); // other fields should use defaults
+    }
+
+    #[test]
+    fn test_challenge_id_default() {
+        let id = ChallengeId::default();
+        let id2 = ChallengeId::default();
+        assert_ne!(id, id2); // Each default should create unique ID
+    }
+
+    #[test]
+    fn test_challenge_id_debug() {
+        let id = ChallengeId::new();
+        let debug_str = format!("{:?}", id);
+        assert!(debug_str.starts_with("Challenge("));
+        assert!(debug_str.ends_with(")"));
+        // Length should be "Challenge(" + 8 chars + ")" = variable based on UUID
+        assert!(debug_str.len() >= 18);
+    }
+
+    #[test]
+    fn test_challenge_id_display_fmt() {
+        let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let id = ChallengeId::from_uuid(uuid);
+        let display = format!("{}", id);
+        assert_eq!(display, "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn test_agent_info_new() {
+        let agent = AgentInfo::new("hash123".to_string());
+        assert_eq!(agent.hash, "hash123");
+        assert!(agent.name.is_none());
+        assert!(agent.owner.is_none());
+        assert!(agent.version.is_none());
+        assert_eq!(agent.metadata_json, "{}");
+    }
+
+    #[test]
+    fn test_agent_info_metadata() {
+        let mut agent = AgentInfo::new("hash".to_string());
+
+        // Default metadata should be null or empty object
+        let meta = agent.metadata();
+        assert!(meta.is_object() || meta.is_null());
+
+        // Set metadata
+        let test_meta = serde_json::json!({"key": "value", "count": 42});
+        agent.set_metadata(test_meta.clone());
+
+        let retrieved = agent.metadata();
+        assert_eq!(retrieved, test_meta);
+    }
+
+    #[test]
+    fn test_agent_info_set_metadata() {
+        let mut agent = AgentInfo::new("hash".to_string());
+
+        let meta = serde_json::json!({
+            "author": "test",
+            "version": "1.0.0",
+            "tags": ["tag1", "tag2"]
+        });
+
+        agent.set_metadata(meta.clone());
+
+        // Verify it was serialized and stored
+        assert!(agent.metadata_json.contains("author"));
+        assert!(agent.metadata_json.contains("test"));
+
+        // Verify we can get it back
+        let retrieved = agent.metadata();
+        assert_eq!(retrieved["author"], "test");
+        assert_eq!(retrieved["version"], "1.0.0");
+    }
+
+    #[test]
     fn test_evaluation_job_creation() {
         let id = ChallengeId::new();
         let job = EvaluationJob::new(
