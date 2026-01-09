@@ -483,7 +483,9 @@ pub async fn weight_reveal_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use platform_core::{Challenge, ChallengeConfig, ChallengeId, Keypair, NetworkConfig, Stake, ValidatorInfo};
+    use platform_core::{
+        Challenge, ChallengeConfig, ChallengeId, Keypair, NetworkConfig, Stake, ValidatorInfo,
+    };
     use platform_subnet_manager::BanList;
 
     fn create_test_state() -> Arc<RpcState> {
@@ -532,8 +534,12 @@ mod tests {
         let state = create_test_state();
         let kp = Keypair::generate();
         let info = ValidatorInfo::new(kp.hotkey(), Stake::new(5_000_000_000_000));
-        
-        state.chain_state.write().validators.insert(kp.hotkey(), info);
+
+        state
+            .chain_state
+            .write()
+            .validators
+            .insert(kp.hotkey(), info);
 
         let params = PaginationParams::default();
         let response = validators_handler(State(state), Query(params)).await;
@@ -576,8 +582,12 @@ mod tests {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
-        
-        state.chain_state.write().challenges.insert(challenge_id, challenge);
+
+        state
+            .chain_state
+            .write()
+            .challenges
+            .insert(challenge_id, challenge);
 
         let response = challenges_handler(State(state)).await;
         let challenges = response.0.data.unwrap();
@@ -611,8 +621,12 @@ mod tests {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
-        
-        state.chain_state.write().challenges.insert(challenge_id, challenge);
+
+        state
+            .chain_state
+            .write()
+            .challenges
+            .insert(challenge_id, challenge);
 
         let response = challenge_handler(State(state), Path(challenge_id.to_string())).await;
         assert!(response.is_ok());
@@ -655,8 +669,12 @@ mod tests {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
-        
-        state.chain_state.write().challenges.insert(challenge_id, challenge);
+
+        state
+            .chain_state
+            .write()
+            .challenges
+            .insert(challenge_id, challenge);
 
         let response = challenge_handler(State(state), Path("test-challenge".to_string())).await;
         assert!(response.is_ok());
@@ -680,9 +698,12 @@ mod tests {
     async fn test_register_handler_banned_validator() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         // Ban the validator
-        state.bans.write().ban_validator(&kp.hotkey(), "Test ban", "test");
+        state
+            .bans
+            .write()
+            .ban_validator(&kp.hotkey(), "Test ban", "test");
 
         let message = "register:1234567890:nonce";
         let signed = kp.sign(message.as_bytes());
@@ -703,10 +724,14 @@ mod tests {
     async fn test_register_handler_already_registered() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         // Pre-register the validator
         let info = ValidatorInfo::new(kp.hotkey(), Stake::new(5_000_000_000_000));
-        state.chain_state.write().validators.insert(kp.hotkey(), info);
+        state
+            .chain_state
+            .write()
+            .validators
+            .insert(kp.hotkey(), info);
 
         let message = "register:1234567890:nonce";
         let signed = kp.sign(message.as_bytes());
@@ -740,7 +765,7 @@ mod tests {
         let response = register_handler(State(state.clone()), Json(req)).await;
         let register_resp = response.0.data.unwrap();
         assert!(register_resp.accepted);
-        
+
         // Verify validator was added
         let chain = state.chain_state.read();
         assert!(chain.validators.contains_key(&kp.hotkey()));
@@ -780,10 +805,14 @@ mod tests {
     async fn test_heartbeat_handler_success() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         // Register the validator
         let info = ValidatorInfo::new(kp.hotkey(), Stake::new(5_000_000_000_000));
-        state.chain_state.write().validators.insert(kp.hotkey(), info);
+        state
+            .chain_state
+            .write()
+            .validators
+            .insert(kp.hotkey(), info);
 
         let req = HeartbeatRequest {
             hotkey: kp.hotkey().to_hex(),
@@ -796,7 +825,7 @@ mod tests {
         let heartbeat_resp = response.0.data.unwrap();
         assert!(heartbeat_resp.accepted);
         assert_eq!(heartbeat_resp.current_block, 0);
-        
+
         // Verify peer_id was updated
         let chain = state.chain_state.read();
         let validator = chain.validators.get(&kp.hotkey()).unwrap();
@@ -815,7 +844,7 @@ mod tests {
     #[tokio::test]
     async fn test_jobs_handler_with_pagination() {
         let state = create_test_state();
-        
+
         // Add some jobs
         let mut chain = state.chain_state.write();
         for i in 0..5 {
@@ -845,12 +874,12 @@ mod tests {
     async fn test_job_result_handler_invalid_job_id() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         // Sign the message correctly first
         let job_id = "not-a-uuid";
         let message = format!("result:{}:0.9", job_id);
         let signed = kp.sign(message.as_bytes());
-        
+
         let req = JobResultRequest {
             job_id: job_id.to_string(),
             hotkey: kp.hotkey().to_hex(),
@@ -895,7 +924,7 @@ mod tests {
     #[tokio::test]
     async fn test_epoch_handler_commit_phase() {
         let state = create_test_state();
-        
+
         // Set block height to commit phase (75-87)
         state.chain_state.write().block_height = 80;
 
@@ -907,7 +936,7 @@ mod tests {
     #[tokio::test]
     async fn test_epoch_handler_reveal_phase() {
         let state = create_test_state();
-        
+
         // Set block height to reveal phase (88-99)
         state.chain_state.write().block_height = 90;
 
@@ -964,7 +993,7 @@ mod tests {
         let kp = Keypair::generate();
         let message = "register:1234567890:nonce";
         let signed = kp.sign(message.as_bytes());
-        
+
         let req = RegisterRequest {
             hotkey: "invalid-hotkey-format".to_string(),
             signature: hex::encode(&signed.signature),
@@ -975,7 +1004,10 @@ mod tests {
         let response = register_handler(State(state), Json(req)).await;
         let register_resp = response.0.data.unwrap();
         assert!(!register_resp.accepted);
-        assert!(register_resp.reason.unwrap().contains("Invalid hotkey format"));
+        assert!(register_resp
+            .reason
+            .unwrap()
+            .contains("Invalid hotkey format"));
     }
 
     #[tokio::test]
@@ -998,7 +1030,7 @@ mod tests {
     async fn test_register_handler_add_validator_error() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         // Fill validators to max capacity to trigger error
         let mut chain = state.chain_state.write();
         for i in 0..chain.config.max_validators {
@@ -1020,7 +1052,10 @@ mod tests {
         let response = register_handler(State(state), Json(req)).await;
         let register_resp = response.0.data.unwrap();
         assert!(!register_resp.accepted);
-        assert!(register_resp.reason.unwrap().contains("Registration failed"));
+        assert!(register_resp
+            .reason
+            .unwrap()
+            .contains("Registration failed"));
     }
 
     #[tokio::test]
@@ -1028,10 +1063,10 @@ mod tests {
         let state = create_test_state();
         let kp = Keypair::generate();
         let job_id = uuid::Uuid::new_v4();
-        
+
         let message = format!("result:{}:0.9", job_id);
         let signed = kp.sign(message.as_bytes());
-        
+
         let req = JobResultRequest {
             job_id: job_id.to_string(),
             hotkey: kp.hotkey().to_hex(),
@@ -1049,7 +1084,7 @@ mod tests {
     async fn test_job_result_handler_success() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         // Add a job first
         let job_id = uuid::Uuid::new_v4();
         let job = platform_core::Job {
@@ -1062,10 +1097,10 @@ mod tests {
             result: None,
         };
         state.chain_state.write().pending_jobs.push(job);
-        
+
         let message = format!("result:{}:0.95", job_id);
         let signed = kp.sign(message.as_bytes());
-        
+
         let req = JobResultRequest {
             job_id: job_id.to_string(),
             hotkey: kp.hotkey().to_hex(),
@@ -1074,14 +1109,18 @@ mod tests {
             metadata: Some(serde_json::json!({"test": "data"})),
         };
 
-        let response = job_result_handler(State(state.clone()), Path(job_id.to_string()), Json(req)).await;
+        let response =
+            job_result_handler(State(state.clone()), Path(job_id.to_string()), Json(req)).await;
         let result_resp = response.0.data.unwrap();
         assert!(result_resp.accepted);
-        
+
         // Verify job was updated
         let chain = state.chain_state.read();
         let updated_job = chain.pending_jobs.iter().find(|j| j.id == job_id).unwrap();
-        assert!(matches!(updated_job.status, platform_core::JobStatus::Completed));
+        assert!(matches!(
+            updated_job.status,
+            platform_core::JobStatus::Completed
+        ));
         assert!(updated_job.result.is_some());
     }
 
@@ -1089,13 +1128,13 @@ mod tests {
     async fn test_weight_commit_handler_success() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         let challenge_id = "challenge1";
         let epoch = 5;
         let commitment_hash = "abc123";
         let message = format!("commit:{}:{}:{}", challenge_id, epoch, commitment_hash);
         let signed = kp.sign(message.as_bytes());
-        
+
         let req = WeightCommitRequest {
             hotkey: kp.hotkey().to_hex(),
             signature: hex::encode(&signed.signature),
@@ -1113,7 +1152,7 @@ mod tests {
     async fn test_weight_reveal_handler_success() {
         let state = create_test_state();
         let kp = Keypair::generate();
-        
+
         let challenge_id = "challenge1";
         let epoch = 5;
         let salt = "salt123";
@@ -1127,7 +1166,7 @@ mod tests {
                 weight: 0.4,
             },
         ];
-        
+
         let weights_str: String = weights
             .iter()
             .map(|w| format!("{}:{}", w.hotkey, w.weight))
@@ -1135,7 +1174,7 @@ mod tests {
             .join(",");
         let message = format!("reveal:{}:{}:{}:{}", challenge_id, epoch, weights_str, salt);
         let signed = kp.sign(message.as_bytes());
-        
+
         let req = WeightRevealRequest {
             hotkey: kp.hotkey().to_hex(),
             signature: hex::encode(&signed.signature),

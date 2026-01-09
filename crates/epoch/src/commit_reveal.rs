@@ -236,7 +236,9 @@ impl CommitRevealState {
                     None => {
                         warn!(
                             "Epoch {}: Submission {} has hotkey {} not in first submission",
-                            self.epoch, idx, &weight.hotkey[..16.min(weight.hotkey.len())]
+                            self.epoch,
+                            idx,
+                            &weight.hotkey[..16.min(weight.hotkey.len())]
                         );
                         return true;
                     }
@@ -471,7 +473,10 @@ mod tests {
         let result = state.submit_commitment(commitment);
         assert!(matches!(
             result,
-            Err(CommitRevealError::WrongEpoch { expected: 0, got: 1 })
+            Err(CommitRevealError::WrongEpoch {
+                expected: 0,
+                got: 1
+            })
         ));
     }
 
@@ -511,7 +516,7 @@ mod tests {
 
         state.submit_commitment(commitment).unwrap();
         state.submit_reveal(reveal.clone()).unwrap();
-        
+
         let result = state.submit_reveal(reveal);
         assert!(matches!(result, Err(CommitRevealError::AlreadyRevealed)));
     }
@@ -542,7 +547,10 @@ mod tests {
         let result = state.submit_reveal(reveal);
         assert!(matches!(
             result,
-            Err(CommitRevealError::WrongEpoch { expected: 0, got: 1 })
+            Err(CommitRevealError::WrongEpoch {
+                expected: 0,
+                got: 1
+            })
         ));
     }
 
@@ -699,7 +707,7 @@ mod tests {
             let state = states_map.get(&(0, challenge_id)).unwrap();
             assert_eq!(state.commitment_count(), 0);
         }
-        
+
         // Verify epoch 2 still exists with commitment
         {
             let states_map = manager.get_or_create(2, challenge_id);
@@ -776,13 +784,19 @@ mod tests {
 
     #[test]
     fn test_commit_reveal_error_display() {
-        let err1 = CommitRevealError::WrongEpoch { expected: 1, got: 2 };
+        let err1 = CommitRevealError::WrongEpoch {
+            expected: 1,
+            got: 2,
+        };
         let err2 = CommitRevealError::WrongChallenge;
         let err3 = CommitRevealError::AlreadyCommitted;
         let err4 = CommitRevealError::AlreadyRevealed;
         let err5 = CommitRevealError::NoCommitment;
         let err6 = CommitRevealError::CommitmentMismatch;
-        let err7 = CommitRevealError::InsufficientValidators { required: 3, got: 1 };
+        let err7 = CommitRevealError::InsufficientValidators {
+            required: 3,
+            got: 1,
+        };
         let err8 = CommitRevealError::AggregationFailed("test".to_string());
 
         // Verify error messages can be formatted

@@ -21,10 +21,6 @@ name = "storage_tests"
 path = "storage_tests.rs"
 
 [[test]]
-name = "network_tests"
-path = "network_tests.rs"
-
-[[test]]
 name = "bittensor_tests"
 path = "bittensor_tests.rs"
 
@@ -34,7 +30,6 @@ path = "epoch_tests.rs"
 
 [dependencies]
 platform-core = { path = "../crates/core" }
-platform-consensus = { path = "../crates/consensus" }
 platform-storage = { path = "../crates/storage" }
 
 tokio = { version = "1.40", features = ["full", "test-util"] }

@@ -276,7 +276,7 @@ mod tests {
         let timestamp = now();
         // Should be a reasonable Unix timestamp (after 2020)
         assert!(timestamp > 1577836800); // Jan 1, 2020
-        // Should be less than far future (year 2100)
+                                         // Should be less than far future (year 2100)
         assert!(timestamp < 4102444800); // Jan 1, 2100
     }
 

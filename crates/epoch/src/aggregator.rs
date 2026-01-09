@@ -298,8 +298,7 @@ mod tests {
         let mut challenge = create_test_challenge("Challenge", 0.5);
         challenge.is_active = false;
 
-        let distribution =
-            aggregator.calculate_emissions(0, 1000, &[challenge], &HashMap::new());
+        let distribution = aggregator.calculate_emissions(0, 1000, &[challenge], &HashMap::new());
 
         assert_eq!(distribution.distributions.len(), 0);
     }
@@ -310,8 +309,7 @@ mod tests {
 
         let challenge = create_test_challenge("Challenge", 0.0);
 
-        let distribution =
-            aggregator.calculate_emissions(0, 1000, &[challenge], &HashMap::new());
+        let distribution = aggregator.calculate_emissions(0, 1000, &[challenge], &HashMap::new());
 
         assert_eq!(distribution.distributions.len(), 0);
     }
@@ -323,8 +321,7 @@ mod tests {
         let challenge = create_test_challenge("Challenge", 0.5);
 
         // No finalized weights for this challenge
-        let distribution =
-            aggregator.calculate_emissions(0, 1000, &[challenge], &HashMap::new());
+        let distribution = aggregator.calculate_emissions(0, 1000, &[challenge], &HashMap::new());
 
         assert_eq!(distribution.distributions.len(), 0);
     }
@@ -381,17 +378,15 @@ mod tests {
         let validator1 = Keypair::generate().hotkey();
         let validator2 = Keypair::generate().hotkey();
 
-        let finalized = vec![
-            FinalizedWeights {
-                challenge_id: ChallengeId::new(),
-                epoch: 0,
-                weights: vec![],
-                participating_validators: vec![],
-                excluded_validators: vec![validator1.clone(), validator2.clone()],
-                smoothing_applied: 0.0,
-                finalized_at: chrono::Utc::now(),
-            },
-        ];
+        let finalized = vec![FinalizedWeights {
+            challenge_id: ChallengeId::new(),
+            epoch: 0,
+            weights: vec![],
+            participating_validators: vec![],
+            excluded_validators: vec![validator1.clone(), validator2.clone()],
+            smoothing_applied: 0.0,
+            finalized_at: chrono::Utc::now(),
+        }];
 
         let suspicious = aggregator.detect_suspicious_validators(&finalized);
         assert_eq!(suspicious.len(), 2);
@@ -471,7 +466,7 @@ mod tests {
 
         let validator = Keypair::generate().hotkey();
         let metrics = aggregator.validator_metrics(&validator, &[]);
-        
+
         assert_eq!(metrics.epochs_participated, 0);
         assert_eq!(metrics.epochs_excluded, 0);
         assert_eq!(metrics.participation_rate, 0.0);
@@ -561,8 +556,7 @@ mod tests {
             },
         );
 
-        let distribution =
-            aggregator.calculate_emissions(0, 1000, &[challenge], &finalized);
+        let distribution = aggregator.calculate_emissions(0, 1000, &[challenge], &finalized);
 
         // Should handle empty weights gracefully
         assert_eq!(distribution.epoch, 0);

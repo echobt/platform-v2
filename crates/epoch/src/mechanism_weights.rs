@@ -792,7 +792,7 @@ mod tests {
         let commitment = MechanismCommitment::new(1, 1, &weights, &salt);
 
         manager.commit(commitment.clone());
-        
+
         let retrieved = manager.get_commitment(1);
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().mechanism_id, commitment.mechanism_id);
@@ -937,13 +937,8 @@ mod tests {
         // Test that MechanismWeights::new() without hotkey mapping works
         // (even though it logs a warning)
         let assignments = vec![WeightAssignment::new("hotkey1".to_string(), 1.0)];
-        
-        let mech_weights = MechanismWeights::new(
-            1,
-            ChallengeId::new(),
-            assignments,
-            0.5,
-        );
+
+        let mech_weights = MechanismWeights::new(1, ChallengeId::new(), assignments, 0.5);
 
         // Should have UID 0 since no hotkeys can be resolved
         assert!(mech_weights.uids.contains(&BURN_UID));
@@ -1083,7 +1078,7 @@ mod tests {
         );
 
         assert_eq!(mech_weights.mechanism_id, 255);
-        
+
         let (mech_id, _, _) = mech_weights.as_batch_tuple();
         assert_eq!(mech_id, 255);
     }
@@ -1092,31 +1087,31 @@ mod tests {
     fn test_complete_workflow() {
         // Complete workflow test
         let manager = MechanismWeightManager::new(10);
-        
+
         let challenge = ChallengeId::new();
         manager.register_challenge(challenge, 5);
-        
+
         let mut hotkey_to_uid: HotkeyUidMap = HashMap::new();
         hotkey_to_uid.insert("validator1".to_string(), 10);
         hotkey_to_uid.insert("validator2".to_string(), 20);
-        
+
         let weights = vec![
             WeightAssignment::new("validator1".to_string(), 0.7),
             WeightAssignment::new("validator2".to_string(), 0.3),
         ];
-        
+
         manager.submit_weights_with_metagraph(challenge, 5, weights, 0.4, &hotkey_to_uid);
-        
+
         let retrieved = manager.get_mechanism_weights(5);
         assert!(retrieved.is_some());
-        
+
         let mech_weights = retrieved.unwrap();
         assert_eq!(mech_weights.mechanism_id, 5);
         assert_eq!(mech_weights.challenge_id, challenge);
-        
+
         let all = manager.get_all_mechanism_weights();
         assert_eq!(all.len(), 1);
-        
+
         let (mech_id, uids, weights) = &all[0];
         assert_eq!(*mech_id, 5);
         assert!(!uids.is_empty());
@@ -1127,8 +1122,11 @@ mod tests {
     fn test_unknown_challenge_mechanism() {
         let manager = MechanismWeightManager::new(1);
         let unknown_challenge = ChallengeId::new();
-        
-        assert_eq!(manager.get_mechanism_for_challenge(&unknown_challenge), None);
+
+        assert_eq!(
+            manager.get_mechanism_for_challenge(&unknown_challenge),
+            None
+        );
     }
 
     #[test]

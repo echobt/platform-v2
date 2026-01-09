@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn test_app_state_tempo_operations() {
         let state = create_test_state();
-        
+
         // Default tempo
         assert_eq!(state.get_tempo(), DEFAULT_TEMPO);
 

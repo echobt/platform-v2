@@ -188,7 +188,7 @@ mod tests {
     fn test_epoch_state_new() {
         let config = EpochConfig::default();
         let state = EpochState::new(5, 1800, &config);
-        
+
         assert_eq!(state.epoch, 5);
         assert_eq!(state.phase, EpochPhase::Evaluation);
         assert_eq!(state.start_block, 1800);

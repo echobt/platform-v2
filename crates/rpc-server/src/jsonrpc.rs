@@ -2393,10 +2393,7 @@ mod tests {
             RpcHandler::normalize_challenge_name("My_Cool_Challenge"),
             "my-cool-challenge"
         );
-        assert_eq!(
-            RpcHandler::normalize_challenge_name("  Spaces  "),
-            "spaces"
-        );
+        assert_eq!(RpcHandler::normalize_challenge_name("  Spaces  "), "spaces");
         assert_eq!(
             RpcHandler::normalize_challenge_name("Special!@#$%Chars"),
             "specialchars"
@@ -2407,14 +2404,14 @@ mod tests {
     fn test_register_challenge_routes() {
         let handler = create_handler();
         use platform_challenge_sdk::ChallengeRoute;
-        
+
         let routes = vec![
             ChallengeRoute::get("/test", "Test route"),
             ChallengeRoute::post("/submit", "Submit route"),
         ];
-        
+
         handler.register_challenge_routes("test-challenge", routes);
-        
+
         let registered = handler.challenge_routes.read();
         assert!(registered.contains_key("test-challenge"));
         assert_eq!(registered.get("test-challenge").unwrap().len(), 2);
@@ -2424,12 +2421,12 @@ mod tests {
     fn test_unregister_challenge_routes() {
         let handler = create_handler();
         use platform_challenge_sdk::ChallengeRoute;
-        
+
         let routes = vec![ChallengeRoute::get("/test", "Test route")];
         handler.register_challenge_routes("test-challenge", routes);
-        
+
         handler.unregister_challenge_routes("test-challenge");
-        
+
         let registered = handler.challenge_routes.read();
         assert!(!registered.contains_key("test-challenge"));
     }
@@ -2438,10 +2435,10 @@ mod tests {
     fn test_get_all_challenge_routes() {
         let handler = create_handler();
         use platform_challenge_sdk::ChallengeRoute;
-        
+
         let routes = vec![ChallengeRoute::get("/test", "Test route")];
         handler.register_challenge_routes("test-challenge", routes);
-        
+
         let all_routes = handler.get_all_challenge_routes();
         assert_eq!(all_routes.len(), 1);
     }
@@ -2451,7 +2448,7 @@ mod tests {
         let handler = create_handler();
         let kp = Keypair::generate();
         handler.set_keypair(kp.clone());
-        
+
         let stored = handler.keypair.read();
         assert!(stored.is_some());
     }
@@ -2467,9 +2464,12 @@ mod tests {
     fn test_get_param_helpers() {
         let handler = create_handler();
         let params = json!([10, "test", true]);
-        
+
         assert_eq!(handler.get_param_u64(&params, 0, "x"), Some(10));
-        assert_eq!(handler.get_param_str(&params, 1, "y"), Some("test".to_string()));
+        assert_eq!(
+            handler.get_param_str(&params, 1, "y"),
+            Some("test".to_string())
+        );
     }
 
     #[test]
@@ -2563,13 +2563,13 @@ mod tests {
     fn test_metagraph_is_registered_with_valid_hotkey() {
         let handler = create_handler();
         let kp = Keypair::generate();
-        
+
         // Add hotkey to registered_hotkeys
         {
             let mut chain = handler.chain_state.write();
             chain.registered_hotkeys.insert(kp.hotkey());
         }
-        
+
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "metagraph_isRegistered".to_string(),
@@ -2586,7 +2586,7 @@ mod tests {
     fn test_challenge_get_with_routes() {
         let handler = create_handler();
         use platform_challenge_sdk::ChallengeRoute;
-        
+
         // Add a challenge
         let kp = Keypair::generate();
         let challenge_id = platform_core::ChallengeId::new();
@@ -2603,16 +2603,20 @@ mod tests {
             updated_at: chrono::Utc::now(),
             is_active: true,
         };
-        
-        handler.chain_state.write().challenges.insert(challenge_id, challenge);
-        
+
+        handler
+            .chain_state
+            .write()
+            .challenges
+            .insert(challenge_id, challenge);
+
         // Register routes for the challenge
         let routes = vec![
             ChallengeRoute::get("/test", "Test route"),
             ChallengeRoute::post("/submit", "Submit route"),
         ];
         handler.register_challenge_routes(&challenge_id.to_string(), routes);
-        
+
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "challenge_get".to_string(),
@@ -2629,7 +2633,7 @@ mod tests {
     fn test_challenge_get_routes_by_name() {
         let handler = create_handler();
         use platform_challenge_sdk::ChallengeRoute;
-        
+
         // Add a challenge
         let kp = Keypair::generate();
         let challenge_id = platform_core::ChallengeId::new();
@@ -2646,13 +2650,17 @@ mod tests {
             updated_at: chrono::Utc::now(),
             is_active: true,
         };
-        
-        handler.chain_state.write().challenges.insert(challenge_id, challenge);
-        
+
+        handler
+            .chain_state
+            .write()
+            .challenges
+            .insert(challenge_id, challenge);
+
         // Register routes
         let routes = vec![ChallengeRoute::get("/status", "Status route")];
         handler.register_challenge_routes(&challenge_id.to_string(), routes);
-        
+
         // Query by name instead of ID
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),

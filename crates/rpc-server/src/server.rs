@@ -629,7 +629,7 @@ mod tests {
 
         let invalid_body = json!({"method": "test"}); // Missing required fields
         let (status, resp) = handle_single_request(invalid_body, &handler);
-        
+
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(resp.0.error.is_some());
         assert_eq!(resp.0.error.unwrap().code, PARSE_ERROR);
@@ -651,7 +651,7 @@ mod tests {
             "id": 1
         });
         let (status, resp) = handle_single_request(body, &handler);
-        
+
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(resp.0.error.is_some());
     }
@@ -672,7 +672,7 @@ mod tests {
             "id": 1
         });
         let (status, resp) = handle_single_request(body, &handler);
-        
+
         assert_eq!(status, StatusCode::OK);
         assert!(resp.0.result.is_some());
     }
@@ -686,7 +686,7 @@ mod tests {
             min_stake: 5_000_000_000_000,
             cors_enabled: false,
         };
-        
+
         assert_eq!(config.netuid, 99);
         assert_eq!(config.name, "CustomChain");
         assert!(!config.cors_enabled);

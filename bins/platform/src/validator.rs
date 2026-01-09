@@ -1,7 +1,7 @@
-//! Validator mode - P2P Network Validator
+//! Validator mode - Centralized Architecture
 //!
-//! Runs a validator node that participates in consensus and evaluation.
-//! Connects to platform-server for centralized weight calculation.
+//! Runs a validator node that evaluates challenges and submits weights.
+//! Connects to platform-server for centralized coordination.
 //!
 //! This module delegates to the validator-node binary for the actual implementation.
 
@@ -19,14 +19,6 @@ pub struct ValidatorArgs {
     /// Secret key or mnemonic (REQUIRED)
     #[arg(short, long, env = "VALIDATOR_SECRET_KEY", required = true)]
     pub secret_key: String,
-
-    /// Listen address
-    #[arg(short, long, default_value = "/ip4/0.0.0.0/tcp/9000")]
-    pub listen: String,
-
-    /// Bootstrap peer addresses (comma-separated)
-    #[arg(short, long)]
-    pub bootstrap: Option<String>,
 
     /// Data directory
     #[arg(short, long, default_value = "./data")]
@@ -61,11 +53,6 @@ pub struct ValidatorArgs {
     #[arg(long)]
     pub no_bittensor: bool,
 
-    // === Epoch Options ===
-    /// Blocks per epoch
-    #[arg(long, default_value = "100")]
-    pub epoch_length: u64,
-
     // === RPC Options ===
     /// RPC server port
     #[arg(long, default_value = "8080")]
@@ -93,22 +80,14 @@ pub async fn run(args: ValidatorArgs) -> Result<()> {
     let mut cmd_args = vec![
         "--secret-key".to_string(),
         args.secret_key.clone(),
-        "--listen".to_string(),
-        args.listen.clone(),
         "--data-dir".to_string(),
         args.data_dir.display().to_string(),
-        "--sudo-key".to_string(),
-        args.sudo_key.clone(),
         "--stake".to_string(),
         args.stake.to_string(),
-        "--min-stake".to_string(),
-        args.min_stake.to_string(),
         "--subtensor-endpoint".to_string(),
         args.subtensor_endpoint.clone(),
         "--netuid".to_string(),
         args.netuid.to_string(),
-        "--epoch-length".to_string(),
-        args.epoch_length.to_string(),
         "--rpc-port".to_string(),
         args.rpc_port.to_string(),
         "--broker-port".to_string(),
@@ -117,11 +96,6 @@ pub async fn run(args: ValidatorArgs) -> Result<()> {
 
     if args.no_bittensor {
         cmd_args.push("--no-bittensor".to_string());
-    }
-
-    if let Some(ref bootstrap) = args.bootstrap {
-        cmd_args.push("--bootstrap".to_string());
-        cmd_args.push(bootstrap.clone());
     }
 
     if let Some(ref platform_server) = args.platform_server {

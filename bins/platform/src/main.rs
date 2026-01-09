@@ -46,7 +46,7 @@ enum Commands {
     Server(server::ServerArgs),
 
     /// Run as validator node
-    /// Participates in consensus and evaluation
+    /// Evaluates challenges and submits weights to Bittensor
     #[command(visible_alias = "v")]
     Validator(validator::ValidatorArgs),
 

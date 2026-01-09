@@ -4,13 +4,9 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
-use parking_lot::RwLock;
-use platform_consensus::*;
 use platform_core::*;
 use platform_storage::*;
-use std::sync::Arc;
 use tempfile::tempdir;
-use tokio::sync::mpsc;
 
 // ============================================================================
 // CORE ERROR CASES
@@ -204,167 +200,6 @@ mod state_errors {
 }
 
 // ============================================================================
-// CONSENSUS ERROR CASES
-// ============================================================================
-
-mod consensus_errors {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_propose_sudo_not_authorized() {
-        let sudo = Keypair::generate();
-        let not_sudo = Keypair::generate();
-
-        let state = Arc::new(RwLock::new(ChainState::new(
-            sudo.hotkey(),
-            NetworkConfig::default(),
-        )));
-
-        let (tx, _rx) = mpsc::channel(100);
-        let engine = PBFTEngine::new(not_sudo, Arc::clone(&state), tx);
-
-        let action = SudoAction::UpdateConfig {
-            config: NetworkConfig::default(),
-        };
-
-        let result = engine.propose_sudo(action).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_handle_proposal_wrong_signer() {
-        let sudo = Keypair::generate();
-        let state = Arc::new(RwLock::new(ChainState::new(
-            sudo.hotkey(),
-            NetworkConfig::default(),
-        )));
-
-        let (tx, _rx) = mpsc::channel(100);
-        let engine = PBFTEngine::new(sudo.clone(), Arc::clone(&state), tx);
-
-        let other = Keypair::generate();
-        let proposal = Proposal::new(
-            ProposalAction::NewBlock {
-                state_hash: [0u8; 32],
-            },
-            other.hotkey(),
-            0,
-        );
-
-        let result = engine.handle_proposal(proposal, &sudo.hotkey()).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_handle_vote_wrong_signer() {
-        let sudo = Keypair::generate();
-        let voter = Keypair::generate();
-        let wrong_signer = Keypair::generate();
-
-        let state = Arc::new(RwLock::new(ChainState::new(
-            sudo.hotkey(),
-            NetworkConfig::default(),
-        )));
-
-        state
-            .write()
-            .add_validator(ValidatorInfo::new(
-                voter.hotkey(),
-                Stake::new(10_000_000_000),
-            ))
-            .unwrap();
-
-        let (tx, _rx) = mpsc::channel(100);
-        let engine = PBFTEngine::new(sudo, Arc::clone(&state), tx);
-        engine.sync_validators();
-
-        let vote = Vote::approve(uuid::Uuid::new_v4(), voter.hotkey());
-        let result = engine.handle_vote(vote, &wrong_signer.hotkey()).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_handle_vote_non_validator() {
-        let sudo = Keypair::generate();
-        let non_validator = Keypair::generate();
-
-        let state = Arc::new(RwLock::new(ChainState::new(
-            sudo.hotkey(),
-            NetworkConfig::default(),
-        )));
-
-        let (tx, _rx) = mpsc::channel(100);
-        let engine = PBFTEngine::new(sudo, Arc::clone(&state), tx);
-
-        let vote = Vote::approve(uuid::Uuid::new_v4(), non_validator.hotkey());
-        let result = engine.handle_vote(vote, &non_validator.hotkey()).await;
-        assert!(result.is_ok()); // Silently ignored
-    }
-
-    #[test]
-    fn test_round_timeout() {
-        let config = ConsensusConfig {
-            threshold: 0.5,
-            round_timeout_secs: 0,
-            max_rounds: 10,
-        };
-
-        let state = ConsensusState::new(config);
-        state.set_validator_count(4);
-
-        let proposer = Keypair::generate();
-        let proposal = Proposal::new(
-            ProposalAction::NewBlock {
-                state_hash: [0u8; 32],
-            },
-            proposer.hotkey(),
-            0,
-        );
-
-        let id = state.start_round(proposal);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        let timeouts = state.check_timeouts();
-        assert_eq!(timeouts.len(), 1);
-        assert!(!state.is_pending(&id));
-    }
-
-    #[test]
-    fn test_votes_per_validator() {
-        let config = ConsensusConfig::default();
-        let state = ConsensusState::new(config);
-        state.set_validator_count(10);
-
-        let proposer = Keypair::generate();
-        let proposal = Proposal::new(
-            ProposalAction::NewBlock {
-                state_hash: [0u8; 32],
-            },
-            proposer.hotkey(),
-            0,
-        );
-
-        let id = state.start_round(proposal);
-
-        // First voter approves
-        let voter1 = Keypair::generate();
-        state.add_vote(Vote::approve(id, voter1.hotkey()));
-
-        // Second voter rejects
-        let voter2 = Keypair::generate();
-        state.add_vote(Vote::reject(id, voter2.hotkey()));
-
-        // Check the round state
-        if let Some(round) = state.get_round(&id) {
-            // Should have 2 total votes
-            assert_eq!(round.approve_count(), 1);
-            assert_eq!(round.reject_count(), 1);
-            assert_eq!(round.votes.len(), 2);
-        }
-    }
-}
-
-// ============================================================================
 // STORAGE ERROR CASES
 // ============================================================================
 
@@ -514,35 +349,6 @@ mod edge_cases {
         let mut state = ChainState::new(sudo.hotkey(), NetworkConfig::default());
         state.epoch = u64::MAX;
         let _ = state.snapshot(); // Should not panic
-    }
-
-    #[test]
-    fn test_empty_validators_consensus() {
-        let config = ConsensusConfig::default();
-        let state = ConsensusState::new(config);
-        state.set_validator_count(0);
-        assert_eq!(state.threshold(), 0);
-    }
-
-    #[test]
-    fn test_single_validator_consensus() {
-        let config = ConsensusConfig::default();
-        let state = ConsensusState::new(config);
-        state.set_validator_count(1);
-        assert_eq!(state.threshold(), 1);
-
-        let proposer = Keypair::generate();
-        let proposal = Proposal::new(
-            ProposalAction::NewBlock {
-                state_hash: [0u8; 32],
-            },
-            proposer.hotkey(),
-            0,
-        );
-
-        let id = state.start_round(proposal);
-        let result = state.add_vote(Vote::approve(id, proposer.hotkey()));
-        assert!(matches!(result, Some(ConsensusResult::Approved(_))));
     }
 
     #[test]

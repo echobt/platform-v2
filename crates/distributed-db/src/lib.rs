@@ -1,11 +1,10 @@
-//! Distributed Database for Mini-Chain
+//! Distributed Database for Platform
 //!
 #![allow(dead_code)]
 #![allow(unused_variables)]
-//! A decentralized storage system with:
+//! A storage system with:
 //! - **Optimistic Execution**: Apply transactions immediately, confirm at Bittensor block
 //! - **Merkle State Root**: Verifiable state integrity
-//! - **DHT Sync**: Peer-to-peer state synchronization
 //! - **Indexed Queries**: Fast lookups with secondary indexes
 //!
 //! # Architecture
@@ -14,12 +13,12 @@
 //! ┌─────────────────────────────────────────────────────────┐
 //! │                   DistributedDB                         │
 //! ├─────────────────────────────────────────────────────────┤
-//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
-//! │  │   Storage   │  │   Merkle    │  │    Sync     │      │
-//! │  │  (RocksDB)  │  │   Trie      │  │   (DHT)     │      │
-//! │  └─────────────┘  └─────────────┘  └─────────────┘      │
-//! │         │                │                │             │
-//! │         └────────────────┼────────────────┘             │
+//! │  ┌─────────────┐  ┌─────────────┐                       │
+//! │  │   Storage   │  │   Merkle    │                       │
+//! │  │  (RocksDB)  │  │   Trie      │                       │
+//! │  └─────────────┘  └─────────────┘                       │
+//! │         │                │                              │
+//! │         └────────────────┘                              │
 //! │                          │                              │
 //! │              ┌───────────▼───────────┐                  │
 //! │              │   Transaction Pool    │                  │
@@ -34,7 +33,6 @@ pub mod merkle_verification;
 pub mod queries;
 pub mod state;
 pub mod storage;
-pub mod sync;
 pub mod transactions;
 
 #[cfg(test)]
@@ -46,7 +44,6 @@ pub use merkle_verification::*;
 pub use queries::*;
 pub use state::*;
 pub use storage::*;
-pub use sync::*;
 pub use transactions::*;
 
 use parking_lot::RwLock;

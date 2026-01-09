@@ -702,7 +702,10 @@ mod tests {
             .build();
 
         assert_eq!(config.name, Some("test".into()));
-        assert_eq!(config.cmd, Some(vec!["sh".into(), "-c".into(), "echo hello".into()]));
+        assert_eq!(
+            config.cmd,
+            Some(vec!["sh".into(), "-c".into(), "echo hello".into()])
+        );
         assert_eq!(config.env.get("KEY"), Some(&"value".into()));
         assert_eq!(config.env.get("VAR1"), Some(&"val1".into()));
         assert_eq!(config.working_dir, Some("/app".into()));
@@ -723,8 +726,11 @@ mod tests {
         let config = ContainerConfigBuilder::new("test:1", "ch1", "owner1")
             .memory_gb(4.5)
             .build();
-        
-        assert_eq!(config.resources.memory_bytes, (4.5 * 1024.0 * 1024.0 * 1024.0) as i64);
+
+        assert_eq!(
+            config.resources.memory_bytes,
+            (4.5 * 1024.0 * 1024.0 * 1024.0) as i64
+        );
     }
 
     #[test]
@@ -736,7 +742,10 @@ mod tests {
     #[test]
     fn test_secure_container_client_default_path() {
         let client = SecureContainerClient::default_path();
-        assert_eq!(client.socket_path, "/var/run/platform/container-broker.sock");
+        assert_eq!(
+            client.socket_path,
+            "/var/run/platform/container-broker.sock"
+        );
     }
 
     #[test]
@@ -766,7 +775,7 @@ mod tests {
             duration_secs: 1.5,
             timed_out: false,
         };
-        
+
         assert!(result.success);
         assert_eq!(result.logs, "test output");
         assert_eq!(result.duration_secs, 1.5);
@@ -782,7 +791,7 @@ mod tests {
             stopped_containers: 3,
             container_ids: vec!["c1".into(), "c2".into()],
         };
-        
+
         assert_eq!(stats.challenge_id, "challenge-123");
         assert_eq!(stats.total_containers, 10);
         assert_eq!(stats.running_containers, 7);
@@ -794,13 +803,13 @@ mod tests {
     fn test_container_start_result_fields() {
         let mut ports = HashMap::new();
         ports.insert(8080, 38080);
-        
+
         let result = ContainerStartResult {
             container_id: "container-123".into(),
             ports: ports.clone(),
             endpoint: Some("http://test-container:8080".into()),
         };
-        
+
         assert_eq!(result.container_id, "container-123");
         assert_eq!(result.ports, ports);
         assert_eq!(result.endpoint, Some("http://test-container:8080".into()));

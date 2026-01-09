@@ -4557,27 +4557,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "platform-consensus"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bincode",
- "chrono",
- "futures",
- "parking_lot 0.12.5",
- "platform-core",
- "platform-storage",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "platform-core"
 version = "0.1.0"
 dependencies = [
@@ -4605,7 +4584,6 @@ dependencies = [
  "hex",
  "lz4_flex",
  "parking_lot 0.12.5",
- "platform-consensus",
  "platform-core",
  "platform-storage",
  "rand 0.8.5",

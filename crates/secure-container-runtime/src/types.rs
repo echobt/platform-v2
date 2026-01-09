@@ -348,7 +348,7 @@ mod tests {
 
         let json = serde_json::to_string(&mount).unwrap();
         let decoded: MountConfig = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(decoded.source, "/host/path");
         assert_eq!(decoded.target, "/container/path");
         assert!(decoded.read_only);
@@ -409,7 +409,7 @@ mod tests {
 
         let json = serde_json::to_string(&entry).unwrap();
         let decoded: AuditEntry = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(decoded.action, AuditAction::ContainerCreate);
         assert_eq!(decoded.challenge_id, "ch1");
         assert!(decoded.success);
@@ -441,7 +441,7 @@ mod tests {
         let error = ContainerError::PolicyViolation("docker socket blocked".into());
         let json = serde_json::to_string(&error).unwrap();
         let decoded: ContainerError = serde_json::from_str(&json).unwrap();
-        
+
         match decoded {
             ContainerError::PolicyViolation(msg) => assert_eq!(msg, "docker socket blocked"),
             _ => panic!("Wrong error type"),
@@ -471,7 +471,7 @@ mod tests {
 
         let json = serde_json::to_string(&info).unwrap();
         let decoded: ContainerInfo = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(decoded.id, "c1");
         assert_eq!(decoded.name, "test-container");
         assert_eq!(decoded.state, ContainerState::Running);
@@ -511,7 +511,7 @@ mod tests {
 
         let json = serde_json::to_string(&config).unwrap();
         let decoded: ContainerConfig = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(decoded.image, "test:latest");
         assert_eq!(decoded.challenge_id, "ch1");
         assert_eq!(decoded.user, Some("1000:1000".into()));

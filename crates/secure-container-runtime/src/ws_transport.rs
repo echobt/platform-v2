@@ -363,11 +363,11 @@ mod tests {
     fn test_generate_token_different_ttl() {
         let secret = "secret-key";
         let token = generate_token("ch1", "owner1", secret, 7200).unwrap();
-        
+
         let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         let validation = jsonwebtoken::Validation::default();
         let decoded = jsonwebtoken::decode::<WsClaims>(&token, &key, &validation).unwrap();
-        
+
         assert!(decoded.claims.exp > decoded.claims.iat);
         assert_eq!(decoded.claims.exp - decoded.claims.iat, 7200);
     }
@@ -396,7 +396,7 @@ mod tests {
             iat: 1000,
             exp: 2000,
         };
-        
+
         assert_eq!(claims.challenge_id, "challenge-123");
         assert_eq!(claims.owner_id, "owner-456");
         assert_eq!(claims.iat, 1000);
@@ -408,10 +408,10 @@ mod tests {
         let auth_msg = AuthMessage {
             token: "test-jwt-token".into(),
         };
-        
+
         let json = serde_json::to_string(&auth_msg).unwrap();
         assert!(json.contains("test-jwt-token"));
-        
+
         let decoded: AuthMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.token, "test-jwt-token");
     }
@@ -424,7 +424,7 @@ mod tests {
             allowed_challenges: vec!["ch1".into(), "ch2".into()],
             max_connections_per_challenge: 5,
         };
-        
+
         assert_eq!(config.bind_addr, "127.0.0.1:9000");
         assert_eq!(config.jwt_secret, Some("my-secret".into()));
         assert_eq!(config.allowed_challenges.len(), 2);

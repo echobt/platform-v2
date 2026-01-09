@@ -733,11 +733,8 @@ mod tests {
 
     #[test]
     fn test_registered_challenge_new() {
-        let challenge = RegisteredChallenge::new(
-            "test-challenge",
-            "Test Challenge",
-            "test-image:latest",
-        );
+        let challenge =
+            RegisteredChallenge::new("test-challenge", "Test Challenge", "test-image:latest");
 
         assert_eq!(challenge.id, "test-challenge");
         assert_eq!(challenge.name, "Test Challenge");

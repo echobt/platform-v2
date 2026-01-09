@@ -1,6 +1,6 @@
 services:
   # ==========================================================================
-  # Platform Chain Validator Node
+  # Platform Validator Node (Centralized Architecture)
   # ==========================================================================
   validator:
     image: ghcr.io/platformnetwork/platform:latest
@@ -14,7 +14,7 @@ services:
     
     ports:
       - "8080:8080"   # RPC API
-      - "9000:9000"   # P2P Network
+      - "8090:8090"   # Container Broker WebSocket
     
     volumes:
       - validator-data:/data
@@ -25,9 +25,7 @@ services:
       - DATA_DIR=/data
       - VALIDATOR_SECRET_KEY=${VALIDATOR_SECRET_KEY}
       - VALIDATOR_NAME=validator
-    
-    # Bootstrap peer is hardcoded in the binary (bootnode.platform.network)
-    # Override with: --bootstrap /dns4/other-node/tcp/9000/p2p/<PEER_ID>
+      - PLATFORM_SERVER_URL=https://chain.platform.network
     
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]

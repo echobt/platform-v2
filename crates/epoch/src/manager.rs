@@ -391,10 +391,10 @@ mod tests {
     fn test_state_clone() {
         let config = EpochConfig::default();
         let manager = EpochManager::new(config, 0);
-        
+
         let state1 = manager.state();
         let state2 = manager.state();
-        
+
         assert_eq!(state1.epoch, state2.epoch);
         assert_eq!(state1.phase, state2.phase);
     }
@@ -410,11 +410,11 @@ mod tests {
         };
 
         let manager = EpochManager::new(config, 0);
-        
+
         // Move within same phase
         let transition = manager.on_new_block(10);
         assert!(transition.is_none());
-        
+
         let transition = manager.on_new_block(20);
         assert!(transition.is_none());
     }
@@ -430,7 +430,7 @@ mod tests {
         };
 
         let manager = EpochManager::new(config, 0);
-        
+
         // Move to finalization
         manager.on_new_block(95);
         assert_eq!(manager.current_phase(), EpochPhase::Finalization);
@@ -447,18 +447,18 @@ mod tests {
         };
 
         let manager = EpochManager::new(config, 0);
-        
+
         // Jump multiple epochs
         let transition = manager.on_new_block(250);
         assert!(matches!(
             transition,
-            Some(EpochTransition::NewEpoch { 
+            Some(EpochTransition::NewEpoch {
                 old_epoch: 0,
                 new_epoch: 2,
-                .. 
+                ..
             })
         ));
-        
+
         assert_eq!(manager.current_epoch(), 2);
     }
 
@@ -473,11 +473,11 @@ mod tests {
         };
 
         let manager = EpochManager::new(config, 0);
-        
+
         let initial_remaining = manager.blocks_until_next_phase();
         manager.on_new_block(10);
         let new_remaining = manager.blocks_until_next_phase();
-        
+
         assert!(new_remaining < initial_remaining);
     }
 }
