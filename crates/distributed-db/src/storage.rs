@@ -468,4 +468,306 @@ mod tests {
         let agents = storage.iter_prefix(CF_AGENTS, b"agent:").unwrap();
         assert_eq!(agents.len(), 2);
     }
+
+    #[test]
+    fn test_storage_open() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+        assert!(!storage.is_shutdown());
+    }
+
+    #[test]
+    fn test_put_sync() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        storage.put_sync(CF_CHALLENGES, b"key1", b"value1").unwrap();
+        let value = storage.get(CF_CHALLENGES, b"key1").unwrap();
+        assert_eq!(value, Some(b"value1".to_vec()));
+    }
+
+    #[test]
+    fn test_shutdown() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        assert!(!storage.is_shutdown());
+        storage.shutdown();
+        assert!(storage.is_shutdown());
+
+        // Operations should fail after shutdown
+        let result = storage.put(CF_CHALLENGES, b"key", b"value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_shutdown_put_sync() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        storage.shutdown();
+        let result = storage.put_sync(CF_CHALLENGES, b"key", b"value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_state_root_operations() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        // Initially no state root
+        assert!(storage.get_state_root().unwrap().is_none());
+
+        // Set state root
+        let root = [42u8; 32];
+        storage.set_state_root(&root).unwrap();
+
+        // Get state root
+        let retrieved = storage.get_state_root().unwrap();
+        assert_eq!(retrieved, Some(root));
+    }
+
+    #[test]
+    fn test_list_collections() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let collections = storage.list_collections().unwrap();
+        assert!(collections.contains(&CF_CHALLENGES.to_string()));
+        assert!(collections.contains(&CF_AGENTS.to_string()));
+        assert!(collections.contains(&CF_METADATA.to_string()));
+        assert_eq!(collections.len(), ALL_CFS.len());
+    }
+
+    #[test]
+    fn test_collection_size() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        // Initially empty
+        let size = storage.collection_size(CF_CHALLENGES).unwrap();
+        assert_eq!(size, 0);
+
+        // Add some data
+        storage.put(CF_CHALLENGES, b"key1", b"value1").unwrap();
+        storage.put(CF_CHALLENGES, b"key2", b"value2").unwrap();
+
+        let size = storage.collection_size(CF_CHALLENGES).unwrap();
+        assert!(size >= 2);
+    }
+
+    #[test]
+    fn test_store_confirmed_tx() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let hotkey = platform_core::Hotkey::from_bytes(&[1u8; 32]).unwrap();
+        let tx = crate::Transaction::new(
+            hotkey,
+            crate::Operation::Put {
+                collection: "test".to_string(),
+                key: b"key".to_vec(),
+                value: b"value".to_vec(),
+            },
+        );
+
+        let receipt = crate::TransactionReceipt {
+            tx_id: tx.id(),
+            success: true,
+            execution_time_us: 100,
+            state_root: [0u8; 32],
+        };
+
+        storage.store_confirmed_tx(&tx, &receipt, 100).unwrap();
+
+        // Verify it was stored
+        let tx_ids = storage.get_block_transactions(100).unwrap();
+        assert_eq!(tx_ids.len(), 1);
+        assert_eq!(tx_ids[0], tx.id());
+    }
+
+    #[test]
+    fn test_get_block_transactions() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let hotkey = platform_core::Hotkey::from_bytes(&[1u8; 32]).unwrap();
+
+        // Store multiple transactions for the same block
+        for i in 0..3 {
+            let tx = crate::Transaction::new(
+                hotkey.clone(),
+                crate::Operation::Put {
+                    collection: "test".to_string(),
+                    key: format!("key{}", i).into_bytes(),
+                    value: b"value".to_vec(),
+                },
+            );
+
+            let receipt = crate::TransactionReceipt {
+                tx_id: tx.id(),
+                success: true,
+                execution_time_us: 100,
+                state_root: [0u8; 32],
+            };
+
+            storage.store_confirmed_tx(&tx, &receipt, 50).unwrap();
+        }
+
+        let tx_ids = storage.get_block_transactions(50).unwrap();
+        assert_eq!(tx_ids.len(), 3);
+
+        // Different block should return empty
+        let tx_ids_other = storage.get_block_transactions(99).unwrap();
+        assert_eq!(tx_ids_other.len(), 0);
+    }
+
+    #[test]
+    fn test_batch_write_with_delete() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        // First put some data
+        storage.put(CF_AGENTS, b"key1", b"value1").unwrap();
+        storage.put(CF_AGENTS, b"key2", b"value2").unwrap();
+
+        // Batch operations with mix of put and delete
+        let ops = vec![
+            BatchOp::Put {
+                collection: CF_AGENTS.to_string(),
+                key: b"key3".to_vec(),
+                value: b"value3".to_vec(),
+            },
+            BatchOp::Delete {
+                collection: CF_AGENTS.to_string(),
+                key: b"key1".to_vec(),
+            },
+        ];
+
+        storage.write_batch(ops).unwrap();
+
+        // key1 should be deleted
+        assert!(storage.get(CF_AGENTS, b"key1").unwrap().is_none());
+        // key2 should still exist
+        assert_eq!(
+            storage.get(CF_AGENTS, b"key2").unwrap(),
+            Some(b"value2".to_vec())
+        );
+        // key3 should be added
+        assert_eq!(
+            storage.get(CF_AGENTS, b"key3").unwrap(),
+            Some(b"value3".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_compact() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        // Add and delete some data to create fragmentation
+        for i in 0..100 {
+            storage
+                .put(CF_CHALLENGES, format!("key{}", i).as_bytes(), b"value")
+                .unwrap();
+        }
+        for i in 0..50 {
+            storage
+                .delete(CF_CHALLENGES, format!("key{}", i).as_bytes())
+                .unwrap();
+        }
+
+        // Compact should succeed
+        storage.compact().unwrap();
+    }
+
+    #[test]
+    fn test_stats() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        storage.put(CF_CHALLENGES, b"key1", b"value1").unwrap();
+        storage.put(CF_AGENTS, b"key2", b"value2").unwrap();
+
+        let stats = storage.stats();
+        assert!(stats.total_keys >= 2);
+        assert!(stats.collection_sizes.contains_key(CF_CHALLENGES));
+    }
+
+    #[test]
+    fn test_batch_op_variants() {
+        let put_op = BatchOp::Put {
+            collection: "test".to_string(),
+            key: b"key".to_vec(),
+            value: b"value".to_vec(),
+        };
+
+        let delete_op = BatchOp::Delete {
+            collection: "test".to_string(),
+            key: b"key".to_vec(),
+        };
+
+        // Just verify they can be created
+        match put_op {
+            BatchOp::Put { .. } => {}
+            _ => panic!("Expected Put"),
+        }
+
+        match delete_op {
+            BatchOp::Delete { .. } => {}
+            _ => panic!("Expected Delete"),
+        }
+    }
+
+    #[test]
+    fn test_storage_stats_default() {
+        let stats = StorageStats::default();
+        assert_eq!(stats.total_keys, 0);
+        assert!(stats.collection_sizes.is_empty());
+    }
+
+    #[test]
+    fn test_iter_prefix_empty() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let results = storage.iter_prefix(CF_AGENTS, b"nonexistent:").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_get_nonexistent_key() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let value = storage.get(CF_CHALLENGES, b"nonexistent").unwrap();
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_key() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        // Should not error
+        storage.delete(CF_CHALLENGES, b"nonexistent").unwrap();
+    }
+
+    #[test]
+    fn test_iter_collection_empty() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let results = storage.iter_collection(CF_WEIGHTS).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_cf_invalid_name() {
+        let dir = tempdir().unwrap();
+        let storage = RocksStorage::open(dir.path()).unwrap();
+
+        let result = storage.get("invalid_cf", b"key");
+        assert!(result.is_err());
+    }
 }
