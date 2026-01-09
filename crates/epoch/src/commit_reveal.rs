@@ -323,6 +323,7 @@ impl Default for CommitRevealManager {
 mod tests {
     use super::*;
     use platform_core::Keypair;
+    use std::sync::Arc;
 
     fn create_test_commitment(
         validator: &Keypair,
@@ -602,8 +603,9 @@ mod tests {
     #[test]
     fn test_commit_reveal_manager_default() {
         let manager = CommitRevealManager::default();
-        // Just verify it can be created
-        assert!(true);
+        // Verify initial state
+        let result = manager.finalize(0, ChallengeId::new(), 0.3, 1);
+        assert!(result.is_err()); // No commits exist
     }
 
     #[test]
@@ -623,6 +625,19 @@ mod tests {
         manager.cleanup_old_epochs(2, 1);
 
         // Should only have epoch 2 remaining (current 2 - keep 1 = cutoff 1)
+        // Verify old epochs were removed by checking that get_or_create returns empty for epoch 0
+        {
+            let states_map = manager.get_or_create(0, challenge_id);
+            let state = states_map.get(&(0, challenge_id)).unwrap();
+            assert_eq!(state.commitment_count(), 0);
+        }
+        
+        // Verify epoch 2 still exists with commitment
+        {
+            let states_map = manager.get_or_create(2, challenge_id);
+            let state = states_map.get(&(2, challenge_id)).unwrap();
+            assert_eq!(state.commitment_count(), 1);
+        }
     }
 
     #[test]
@@ -631,14 +646,18 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let epoch = 0;
 
-        // First call creates
+        // First call creates the state
         {
-            let _states = manager.get_or_create(epoch, challenge_id);
+            let states = manager.get_or_create(epoch, challenge_id);
+            assert!(states.contains_key(&(epoch, challenge_id)));
         }
 
-        // Second call retrieves existing
+        // Second call retrieves existing - verify by checking it exists
         {
-            let _states = manager.get_or_create(epoch, challenge_id);
+            let states = manager.get_or_create(epoch, challenge_id);
+            let state = states.get(&(epoch, challenge_id)).unwrap();
+            assert_eq!(state.epoch, epoch);
+            assert_eq!(state.challenge_id, challenge_id);
         }
     }
 

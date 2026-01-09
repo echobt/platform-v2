@@ -862,8 +862,9 @@ mod tests {
     #[test]
     fn test_mechanism_commit_reveal_manager_default() {
         let manager = MechanismCommitRevealManager::default();
-        // Just verify it can be created
-        assert!(true);
+        // Verify initial state - with no commitments, all_revealed() returns true (vacuously)
+        assert!(manager.all_revealed());
+        assert!(manager.get_all_commitments().is_empty());
     }
 
     #[test]
@@ -1020,7 +1021,7 @@ mod tests {
         );
 
         // Should still handle small weights
-        assert!(mech_weights.uids.len() > 0);
+        assert!(!mech_weights.uids.is_empty());
         let sum: u32 = mech_weights.weights.iter().map(|w| *w as u32).sum();
         assert_eq!(sum, MAX_WEIGHT as u32);
     }
@@ -1118,7 +1119,7 @@ mod tests {
         
         let (mech_id, uids, weights) = &all[0];
         assert_eq!(*mech_id, 5);
-        assert!(uids.len() > 0);
+        assert!(!uids.is_empty());
         assert_eq!(uids.len(), weights.len());
     }
 
