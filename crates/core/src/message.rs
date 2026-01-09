@@ -1684,11 +1684,22 @@ mod tests {
     #[test]
     fn test_is_development_mode() {
         // Test the development mode check
-        // By default it should be false unless DEVELOPMENT_MODE env is set
-        let result = is_development_mode();
-        // We can't assert a specific value since it depends on environment
-        // but we can verify the function runs without error
-        let _ = result;
+        // Save current state and test both paths
+        let original = std::env::var("DEVELOPMENT_MODE").ok();
+
+        // Test with DEVELOPMENT_MODE unset
+        std::env::remove_var("DEVELOPMENT_MODE");
+        assert!(!is_development_mode());
+
+        // Test with DEVELOPMENT_MODE set
+        std::env::set_var("DEVELOPMENT_MODE", "1");
+        assert!(is_development_mode());
+
+        // Restore original state
+        match original {
+            Some(val) => std::env::set_var("DEVELOPMENT_MODE", val),
+            None => std::env::remove_var("DEVELOPMENT_MODE"),
+        }
     }
 
     #[test]

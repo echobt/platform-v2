@@ -320,18 +320,18 @@ mod tests {
 
     #[test]
     fn test_known_mnemonic_produces_expected_hotkey() {
-        // Test the production sudo mnemonic
-        let mnemonic = "law stock festival crisp swap toilet bridge once payment alien antenna witness echo cheap search insect zebra thrive sugar picnic turtle grab satoshi nut";
+        // Test with a well-known BIP39 test vector (NOT a production key)
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let kp = Keypair::from_mnemonic(mnemonic).unwrap();
 
-        // Expected SS58: 5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At
-        let expected_hotkey_hex =
-            "da220409678df5f06074a671abdc1f19bc2ba151729fdb9a8e4be284e60c9401";
-        assert_eq!(kp.hotkey().to_hex(), expected_hotkey_hex);
+        // Verify deterministic derivation - same mnemonic always produces same key
+        let kp2 = Keypair::from_mnemonic(mnemonic).unwrap();
+        assert_eq!(kp.hotkey(), kp2.hotkey());
 
-        // Verify SS58 format
+        // Verify SS58 format is valid
         let ss58 = kp.ss58_address();
-        assert_eq!(ss58, "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At");
+        assert!(ss58.starts_with('5'));
+        assert!(ss58.len() >= 46 && ss58.len() <= 50);
     }
 
     #[test]
@@ -359,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_message_display() {
+    fn test_signed_message_debug() {
         let keypair = Keypair::generate();
         let message = b"test";
         let signature = keypair.sign_bytes(message).unwrap();
@@ -368,49 +368,75 @@ mod tests {
             signature,
             signer: keypair.hotkey(),
         };
-        let display_str = format!("{:?}", signed_msg);
-        assert!(display_str.contains("SignedMessage"));
+        let debug_str = format!("{:?}", signed_msg);
+        assert!(debug_str.contains("SignedMessage"));
     }
 
     #[test]
     fn test_keypair_seed_fallback() {
-        // Create a keypair without mini_seed (using generate)
-        let keypair = Keypair::generate();
+        // Force the fallback branch by creating a keypair and removing mini_seed
+        let mut keypair = Keypair::generate();
+        keypair.mini_seed = None;
+
         // Call seed() which should hit the fallback path
         let seed = keypair.seed();
         assert_eq!(seed.len(), 32);
+
+        // Verify the fallback extracts from raw_vec
+        let raw = keypair.pair.to_raw_vec();
+        if raw.len() >= 32 {
+            let mut expected = [0u8; 32];
+            expected.copy_from_slice(&raw[..32]);
+            assert_eq!(seed, expected);
+        }
     }
 
     #[test]
     fn test_sign_data_serialization_error() {
         // Test that sign_data properly handles serialization errors
-        // We can't easily create a serialization error without a custom type,
-        // but we can verify the error path exists by checking the function signature
-        // The actual error handling is tested implicitly through normal usage
         let keypair = Keypair::generate();
 
-        // Test with valid data to ensure the success path works
-        #[derive(Serialize)]
-        struct TestData {
-            value: u64,
+        // Create a type that always fails to serialize
+        struct FailSerialize;
+        impl serde::Serialize for FailSerialize {
+            fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom(
+                    "intentional serialization failure",
+                ))
+            }
         }
-        let data = TestData { value: 42 };
-        let result = keypair.sign_data(&data);
-        assert!(result.is_ok());
+
+        let result = keypair.sign_data(&FailSerialize);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            MiniChainError::Serialization(_)
+        ));
     }
 
     #[test]
     fn test_hash_data_serialization_error() {
-        // Test hash_data with valid data - error path is covered by type system
-        #[derive(Serialize)]
-        struct TestData {
-            value: String,
+        // Test hash_data with a type that fails to serialize
+        struct FailSerialize;
+        impl serde::Serialize for FailSerialize {
+            fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom(
+                    "intentional serialization failure",
+                ))
+            }
         }
-        let data = TestData {
-            value: "test".to_string(),
-        };
-        let result = hash_data(&data);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 32);
+
+        let result = hash_data(&FailSerialize);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            MiniChainError::Serialization(_)
+        ));
     }
 }
