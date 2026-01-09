@@ -800,6 +800,112 @@ mod tests {
     }
 
     #[test]
+    fn test_job_queue_high_warning() {
+        let config = HealthConfig {
+            max_pending_jobs: 50,
+            ..Default::default()
+        };
+        let mut monitor = HealthMonitor::new(config);
+
+        let metrics = HealthMetrics {
+            pending_jobs: 75, // > max_pending but <= 2 * max_pending
+            running_jobs: 5,
+            ..Default::default()
+        };
+
+        let status = monitor.check_job_queue(&metrics);
+        assert_eq!(status.status, HealthStatus::Degraded);
+        assert!(status.details.contains("75 pending"));
+        assert!(matches!(status.last_success, Some(_)));
+    }
+
+    #[test]
+    fn test_check_evaluations_zero_total() {
+        let config = HealthConfig::default();
+        let mut monitor = HealthMonitor::new(config);
+
+        let metrics = HealthMetrics {
+            evaluations_per_hour: 0,
+            failures_per_hour: 0,
+            avg_eval_time_ms: 1000,
+            ..Default::default()
+        };
+
+        let result = monitor.check_evaluations(&metrics);
+        assert_eq!(result.status, HealthStatus::Healthy);
+        assert!(result.details.contains("0/hr"));
+        assert!(matches!(result.last_success, Some(_)));
+        assert!(monitor.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn test_check_evaluations_slow_avg_time() {
+        let config = HealthConfig {
+            max_eval_time: 1, // seconds (=> 1000 ms threshold)
+            ..Default::default()
+        };
+        let mut monitor = HealthMonitor::new(config);
+
+        let metrics = HealthMetrics {
+            evaluations_per_hour: 10,
+            failures_per_hour: 0,
+            avg_eval_time_ms: 5_000, // exceeds max_time
+            ..Default::default()
+        };
+
+        let result = monitor.check_evaluations(&metrics);
+        assert_eq!(result.status, HealthStatus::Degraded);
+        assert!(result.details.contains("5000ms"));
+        assert!(matches!(result.last_success, Some(_)));
+        assert!(!monitor.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn test_clear_failure_acknowledges_alerts() {
+        let config = HealthConfig {
+            failure_threshold: 1,
+            ..Default::default()
+        };
+        let mut monitor = HealthMonitor::new(config);
+
+        monitor.add_alert("job_queue", AlertSeverity::Warning, "Queue high".into());
+        assert!(monitor.needs_recovery());
+        assert_eq!(monitor.active_alerts().len(), 1);
+
+        monitor.clear_failure("job_queue");
+
+        assert!(!monitor.needs_recovery());
+        assert!(monitor.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn test_worse_status_priority_ordering() {
+        assert_eq!(HealthMonitor::worse_status(HealthStatus::Healthy, HealthStatus::Degraded), HealthStatus::Degraded);
+        assert_eq!(HealthMonitor::worse_status(HealthStatus::Degraded, HealthStatus::Unhealthy), HealthStatus::Unhealthy);
+        assert_eq!(HealthMonitor::worse_status(HealthStatus::Unhealthy, HealthStatus::Critical), HealthStatus::Critical);
+        assert_eq!(HealthMonitor::worse_status(HealthStatus::Critical, HealthStatus::Healthy), HealthStatus::Critical);
+    }
+
+    #[test]
+    fn test_worst_component_tracking() {
+        let config = HealthConfig {
+            failure_threshold: 2,
+            ..Default::default()
+        };
+        let mut monitor = HealthMonitor::new(config);
+
+        monitor.add_alert("cpu", AlertSeverity::Warning, "High CPU".into());
+        monitor.add_alert("memory", AlertSeverity::Warning, "High memory".into());
+        let first_alert_id = monitor.active_alerts().iter().find(|a| a.component == "memory").unwrap().id;
+        monitor.acknowledge_alert(first_alert_id);
+        monitor.add_alert("memory", AlertSeverity::Warning, "Still high".into());
+
+        let worst = monitor.worst_component().unwrap();
+        assert_eq!(worst.0, "memory");
+        assert_eq!(worst.1, 2);
+    }
+
+    #[test]
     fn test_alert_acknowledgement() {
         let config = HealthConfig::default();
         let mut monitor = HealthMonitor::new(config);
