@@ -470,6 +470,7 @@ impl QueryEntry {
 mod tests {
     use super::*;
     use crate::storage::RocksStorage;
+    use crate::test_utils::*;
     use tempfile::tempdir;
 
     #[test]
@@ -495,5 +496,459 @@ mod tests {
         let query = Query::new("challenges").filter(Filter::eq("name", "Terminal Benchmark"));
         let result = indexes.execute_query(query).unwrap();
         assert_eq!(result.entries.len(), 1);
+    }
+
+    #[test]
+    fn test_index_manager_new() {
+        let (indexes, _, _dir) = create_test_index_manager();
+        assert_eq!(indexes.indexes.len(), 5);
+    }
+
+    #[test]
+    fn test_add_index() {
+        let (mut indexes, _, _dir) = create_test_index_manager();
+        let count_before = indexes.indexes.len();
+
+        indexes.add_index(IndexDef {
+            name: "test_index".to_string(),
+            collection: "test".to_string(),
+            field: "field".to_string(),
+            index_type: IndexType::Hash,
+        });
+
+        assert_eq!(indexes.indexes.len(), count_before + 1);
+    }
+
+    #[test]
+    fn test_query_eq_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        let challenge1 = serde_json::json!({"name": "Challenge1", "mechanism_id": 1});
+        let challenge2 = serde_json::json!({"name": "Challenge2", "mechanism_id": 2});
+
+        storage
+            .put(
+                "challenges",
+                b"c1",
+                &serde_json::to_vec(&challenge1).unwrap(),
+            )
+            .unwrap();
+        storage
+            .put(
+                "challenges",
+                b"c2",
+                &serde_json::to_vec(&challenge2).unwrap(),
+            )
+            .unwrap();
+
+        indexes
+            .index_entry(
+                "challenges",
+                b"c1",
+                &serde_json::to_vec(&challenge1).unwrap(),
+            )
+            .unwrap();
+        indexes
+            .index_entry(
+                "challenges",
+                b"c2",
+                &serde_json::to_vec(&challenge2).unwrap(),
+            )
+            .unwrap();
+
+        let query = Query::new("challenges").filter(Filter::eq("name", "Challenge1"));
+        let result = indexes.execute_query(query).unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.total_count, 1);
+    }
+
+    #[test]
+    fn test_query_gt_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=5 {
+            let eval = serde_json::json!({"agent_hash": format!("agent{}", i), "score": i * 10});
+            storage
+                .put(
+                    "evaluations",
+                    format!("eval{}", i).as_bytes(),
+                    &serde_json::to_vec(&eval).unwrap(),
+                )
+                .unwrap();
+            indexes
+                .index_entry(
+                    "evaluations",
+                    format!("eval{}", i).as_bytes(),
+                    &serde_json::to_vec(&eval).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("evaluations").filter(Filter::gt("score", "00000000000000000030"));
+        let result = indexes.execute_query(query).unwrap();
+        assert!(result.entries.len() >= 2); // scores 40, 50
+    }
+
+    #[test]
+    fn test_query_contains_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        let challenge1 = serde_json::json!({"name": "Terminal Benchmark", "mechanism_id": 1});
+        let challenge2 = serde_json::json!({"name": "Simple Task", "mechanism_id": 2});
+
+        storage
+            .put(
+                "challenges",
+                b"c1",
+                &serde_json::to_vec(&challenge1).unwrap(),
+            )
+            .unwrap();
+        storage
+            .put(
+                "challenges",
+                b"c2",
+                &serde_json::to_vec(&challenge2).unwrap(),
+            )
+            .unwrap();
+
+        indexes
+            .index_entry(
+                "challenges",
+                b"c1",
+                &serde_json::to_vec(&challenge1).unwrap(),
+            )
+            .unwrap();
+        indexes
+            .index_entry(
+                "challenges",
+                b"c2",
+                &serde_json::to_vec(&challenge2).unwrap(),
+            )
+            .unwrap();
+
+        let query = Query::new("challenges").filter(Filter::contains("name", "Terminal"));
+        let result = indexes.execute_query(query).unwrap();
+        assert_eq!(result.entries.len(), 1);
+    }
+
+    #[test]
+    fn test_query_in_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=5 {
+            let agent = serde_json::json!({"challenge_id": format!("ch{}", i), "status": "active"});
+            storage
+                .put(
+                    "agents",
+                    format!("agent{}", i).as_bytes(),
+                    &serde_json::to_vec(&agent).unwrap(),
+                )
+                .unwrap();
+            indexes
+                .index_entry(
+                    "agents",
+                    format!("agent{}", i).as_bytes(),
+                    &serde_json::to_vec(&agent).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("agents").filter(Filter {
+            field: "challenge_id".to_string(),
+            op: FilterOp::In(vec!["ch1".to_string(), "ch3".to_string()]),
+        });
+        let result = indexes.execute_query(query).unwrap();
+        assert_eq!(result.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_query_without_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=3 {
+            let challenge = serde_json::json!({"name": format!("C{}", i), "mechanism_id": i});
+            storage
+                .put(
+                    "challenges",
+                    format!("c{}", i).as_bytes(),
+                    &serde_json::to_vec(&challenge).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("challenges");
+        let result = indexes.execute_query(query).unwrap();
+        assert_eq!(result.entries.len(), 3);
+        assert_eq!(result.total_count, 3);
+    }
+
+    #[test]
+    fn test_query_with_limit() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=10 {
+            let challenge = serde_json::json!({"name": format!("C{}", i), "mechanism_id": i});
+            storage
+                .put(
+                    "challenges",
+                    format!("c{}", i).as_bytes(),
+                    &serde_json::to_vec(&challenge).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("challenges").limit(5);
+        let result = indexes.execute_query(query).unwrap();
+        assert!(result.entries.len() <= 5);
+    }
+
+    #[test]
+    fn test_remove_entry() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        let challenge = serde_json::json!({"name": "Test", "mechanism_id": 1});
+        let key = b"test-key";
+        let value = serde_json::to_vec(&challenge).unwrap();
+
+        storage.put("challenges", key, &value).unwrap();
+        indexes.index_entry("challenges", key, &value).unwrap();
+
+        // Verify indexed
+        let query = Query::new("challenges").filter(Filter::eq("name", "Test"));
+        let result = indexes.execute_query(query).unwrap();
+        assert_eq!(result.entries.len(), 1);
+
+        // Remove entry
+        indexes.remove_entry("challenges", key).unwrap();
+
+        // Verify not indexed anymore (note: storage still has the entry)
+        let result2 = indexes
+            .execute_query(Query::new("challenges").filter(Filter::eq("name", "Test")))
+            .unwrap();
+        assert_eq!(result2.entries.len(), 0);
+    }
+
+    #[test]
+    fn test_index_non_json_value() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        let non_json = b"not json data";
+        storage.put("challenges", b"key", non_json).unwrap();
+
+        // Should not error, just skip indexing
+        let result = indexes.index_entry("challenges", b"key", non_json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_query_scan_without_index() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        // Use challenges collection but query a field that doesn't have an index
+        let item = serde_json::json!({"custom_field": "value", "name": "test"});
+        storage
+            .put("challenges", b"key1", &serde_json::to_vec(&item).unwrap())
+            .unwrap();
+
+        // Query a field that doesn't have an index - will do full scan
+        let query = Query::new("challenges").filter(Filter::eq("custom_field", "value"));
+        let result = indexes.execute_query(query).unwrap();
+        assert_eq!(result.entries.len(), 1);
+    }
+
+    #[test]
+    fn test_query_entry_as_json() {
+        let entry = QueryEntry {
+            key: b"key".to_vec(),
+            value: serde_json::to_vec(&serde_json::json!({"field": "value"})).unwrap(),
+        };
+
+        let json = entry.as_json().unwrap();
+        assert_eq!(json["field"], "value");
+    }
+
+    #[test]
+    fn test_query_entry_as_json_invalid() {
+        let entry = QueryEntry {
+            key: b"key".to_vec(),
+            value: b"not json".to_vec(),
+        };
+
+        assert!(entry.as_json().is_none());
+    }
+
+    #[test]
+    fn test_query_builder_methods() {
+        let query = Query::new("test")
+            .filter(Filter::eq("field", "value"))
+            .order_by("field", true)
+            .limit(10)
+            .offset(5);
+
+        assert_eq!(query.collection, "test");
+        assert!(query.filter.is_some());
+        assert!(query.order_by.is_some());
+        assert_eq!(query.limit, Some(10));
+        assert_eq!(query.offset, Some(5));
+    }
+
+    #[test]
+    fn test_filter_constructors() {
+        let eq_filter = Filter::eq("field", "value");
+        assert_eq!(eq_filter.field, "field");
+        match eq_filter.op {
+            FilterOp::Eq(v) => assert_eq!(v, "value"),
+            _ => panic!("Expected Eq"),
+        }
+
+        let gt_filter = Filter::gt("field", "100");
+        match gt_filter.op {
+            FilterOp::Gt(_) => {}
+            _ => panic!("Expected Gt"),
+        }
+
+        let contains_filter = Filter::contains("field", "substring");
+        match contains_filter.op {
+            FilterOp::Contains(_) => {}
+            _ => panic!("Expected Contains"),
+        }
+    }
+
+    #[test]
+    fn test_index_type_variants() {
+        let _ = IndexType::Hash;
+        let _ = IndexType::BTree;
+        let _ = IndexType::FullText;
+    }
+
+    #[test]
+    fn test_filter_op_variants() {
+        let _eq = FilterOp::Eq("test".to_string());
+        let _gt = FilterOp::Gt("test".to_string());
+        let _gte = FilterOp::Gte("test".to_string());
+        let _lt = FilterOp::Lt("test".to_string());
+        let _lte = FilterOp::Lte("test".to_string());
+        let _in = FilterOp::In(vec!["a".to_string(), "b".to_string()]);
+        let _contains = FilterOp::Contains("test".to_string());
+    }
+
+    #[test]
+    fn test_query_gte_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=3 {
+            let weight = serde_json::json!({"block": i * 100, "value": i});
+            storage
+                .put(
+                    "weights",
+                    format!("w{}", i).as_bytes(),
+                    &serde_json::to_vec(&weight).unwrap(),
+                )
+                .unwrap();
+            indexes
+                .index_entry(
+                    "weights",
+                    format!("w{}", i).as_bytes(),
+                    &serde_json::to_vec(&weight).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("weights").filter(Filter {
+            field: "block".to_string(),
+            op: FilterOp::Gte("00000000000000000200".to_string()),
+        });
+        let result = indexes.execute_query(query).unwrap();
+        assert!(result.entries.len() >= 2); // blocks 200, 300
+    }
+
+    #[test]
+    fn test_query_lt_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=3 {
+            let weight = serde_json::json!({"block": i * 100, "value": i});
+            storage
+                .put(
+                    "weights",
+                    format!("w{}", i).as_bytes(),
+                    &serde_json::to_vec(&weight).unwrap(),
+                )
+                .unwrap();
+            indexes
+                .index_entry(
+                    "weights",
+                    format!("w{}", i).as_bytes(),
+                    &serde_json::to_vec(&weight).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("weights").filter(Filter {
+            field: "block".to_string(),
+            op: FilterOp::Lt("00000000000000000200".to_string()),
+        });
+        let result = indexes.execute_query(query).unwrap();
+        assert!(result.entries.len() >= 1); // block 100
+    }
+
+    #[test]
+    fn test_query_lte_filter() {
+        let (indexes, storage, _dir) = create_test_index_manager();
+
+        for i in 1..=3 {
+            let weight = serde_json::json!({"block": i * 100, "value": i});
+            storage
+                .put(
+                    "weights",
+                    format!("w{}", i).as_bytes(),
+                    &serde_json::to_vec(&weight).unwrap(),
+                )
+                .unwrap();
+            indexes
+                .index_entry(
+                    "weights",
+                    format!("w{}", i).as_bytes(),
+                    &serde_json::to_vec(&weight).unwrap(),
+                )
+                .unwrap();
+        }
+
+        let query = Query::new("weights").filter(Filter {
+            field: "block".to_string(),
+            op: FilterOp::Lte("00000000000000000200".to_string()),
+        });
+        let result = indexes.execute_query(query).unwrap();
+        assert!(result.entries.len() >= 2); // blocks 100, 200
+    }
+
+    #[test]
+    fn test_matches_filter_with_number() {
+        let (indexes, _, _dir) = create_test_index_manager();
+
+        let json = serde_json::json!({"score": 100});
+        let filter = Filter::eq("score", "100");
+
+        assert!(indexes.matches_filter(&json, &filter));
+    }
+
+    #[test]
+    fn test_matches_filter_with_bool() {
+        let (indexes, _, _dir) = create_test_index_manager();
+
+        let json = serde_json::json!({"active": true});
+        let filter = Filter::eq("active", "true");
+
+        assert!(indexes.matches_filter(&json, &filter));
+    }
+
+    #[test]
+    fn test_matches_filter_missing_field() {
+        let (indexes, _, _dir) = create_test_index_manager();
+
+        let json = serde_json::json!({"other": "value"});
+        let filter = Filter::eq("missing_field", "value");
+
+        assert!(!indexes.matches_filter(&json, &filter));
     }
 }

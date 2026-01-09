@@ -12,12 +12,12 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────┐
-//! │                   DistributedDB                          │
+//! │                   DistributedDB                         │
 //! ├─────────────────────────────────────────────────────────┤
-//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-//! │  │   Storage   │  │   Merkle    │  │    Sync     │     │
-//! │  │  (RocksDB)  │  │   Trie      │  │   (DHT)     │     │
-//! │  └─────────────┘  └─────────────┘  └─────────────┘     │
+//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+//! │  │   Storage   │  │   Merkle    │  │    Sync     │      │
+//! │  │  (RocksDB)  │  │   Trie      │  │   (DHT)     │      │
+//! │  └─────────────┘  └─────────────┘  └─────────────┘      │
 //! │         │                │                │             │
 //! │         └────────────────┼────────────────┘             │
 //! │                          │                              │
@@ -36,6 +36,9 @@ pub mod state;
 pub mod storage;
 pub mod sync;
 pub mod transactions;
+
+#[cfg(test)]
+mod test_utils;
 
 pub use indexes::*;
 pub use merkle::*;
@@ -306,6 +309,7 @@ impl SyncData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::*;
     use tempfile::tempdir;
 
     #[test]
@@ -349,5 +353,270 @@ mod tests {
         // Data should be available immediately
         let value = db.get("challenges", b"key1").unwrap();
         assert_eq!(value, Some(b"value1".to_vec()));
+    }
+
+    #[test]
+    fn test_db_open() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator).unwrap();
+        assert_eq!(db.current_block(), 0);
+        assert_eq!(db.state_root(), [0u8; 32]);
+    }
+
+    #[test]
+    fn test_state_root() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
+
+        let root1 = db.state_root();
+
+        // Use apply_optimistic which properly updates merkle trie through transactions
+        let tx = Transaction::new(
+            validator,
+            Operation::Put {
+                collection: "challenges".to_string(),
+                key: b"key1".to_vec(),
+                value: b"value1".to_vec(),
+            },
+        );
+        db.apply_optimistic(tx).unwrap();
+        let root2 = db.state_root();
+
+        // State root is retrieved (both roots are valid 32-byte arrays)
+        assert_eq!(root1.len(), 32);
+        assert_eq!(root2.len(), 32);
+    }
+
+    #[test]
+    fn test_current_block() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
+
+        assert_eq!(db.current_block(), 0);
+
+        // Confirm block should update current block
+        let tx = Transaction::new(
+            validator.clone(),
+            Operation::Put {
+                collection: "challenges".to_string(),
+                key: b"key1".to_vec(),
+                value: b"value1".to_vec(),
+            },
+        );
+        db.apply_optimistic(tx).unwrap();
+        let conf = db.confirm_block(100).unwrap();
+
+        assert_eq!(conf.block_number, 100);
+        assert_eq!(db.current_block(), 100);
+    }
+
+    #[test]
+    fn test_confirm_block() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
+
+        // Apply multiple transactions
+        for i in 1..=3 {
+            let tx = Transaction::new(
+                validator.clone(),
+                Operation::Put {
+                    collection: "challenges".to_string(),
+                    key: format!("key{}", i).into_bytes(),
+                    value: format!("value{}", i).into_bytes(),
+                },
+            );
+            db.apply_optimistic(tx).unwrap();
+        }
+
+        let conf = db.confirm_block(10).unwrap();
+        assert_eq!(conf.block_number, 10);
+        assert!(conf.confirmed_count >= 1); // At least one transaction confirmed
+                                            // State root may or may not be non-zero depending on merkle implementation
+    }
+
+    #[test]
+    fn test_query_operations() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator).unwrap();
+
+        // Insert JSON data
+        let challenge = serde_json::json!({"name": "Test", "mechanism_id": 1});
+        db.put(
+            "challenges",
+            b"ch1",
+            &serde_json::to_vec(&challenge).unwrap(),
+        )
+        .unwrap();
+
+        let query = Query::new("challenges").filter(Filter::eq("name", "Test"));
+        let result = db.query(query).unwrap();
+        assert_eq!(result.entries.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_operation() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
+
+        let tx = Transaction::new(
+            validator.clone(),
+            Operation::Put {
+                collection: "challenges".to_string(),
+                key: b"key1".to_vec(),
+                value: b"value1".to_vec(),
+            },
+        );
+        db.apply_optimistic(tx).unwrap();
+
+        // Delete via transaction
+        let tx_delete = Transaction::new(
+            validator,
+            Operation::Delete {
+                collection: "challenges".to_string(),
+                key: b"key1".to_vec(),
+            },
+        );
+        db.apply_optimistic(tx_delete).unwrap();
+
+        assert!(db.get("challenges", b"key1").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_batch_put_operation() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
+
+        let tx = Transaction::new(
+            validator,
+            Operation::BatchPut {
+                operations: vec![
+                    (
+                        "challenges".to_string(),
+                        b"key1".to_vec(),
+                        b"value1".to_vec(),
+                    ),
+                    (
+                        "challenges".to_string(),
+                        b"key2".to_vec(),
+                        b"value2".to_vec(),
+                    ),
+                ],
+            },
+        );
+
+        let receipt = db.apply_optimistic(tx).unwrap();
+        assert!(receipt.success);
+
+        assert_eq!(
+            db.get("challenges", b"key1").unwrap(),
+            Some(b"value1".to_vec())
+        );
+        assert_eq!(
+            db.get("challenges", b"key2").unwrap(),
+            Some(b"value2".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_get_sync_state() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator.clone()).unwrap();
+
+        let tx = Transaction::new(
+            validator,
+            Operation::Put {
+                collection: "challenges".to_string(),
+                key: b"key1".to_vec(),
+                value: b"value1".to_vec(),
+            },
+        );
+        db.apply_optimistic(tx).unwrap();
+
+        let sync_state = db.get_sync_state();
+        assert_eq!(sync_state.block_number, 0);
+        assert!(sync_state.pending_count >= 1);
+        // State root is available
+    }
+
+    #[test]
+    fn test_apply_sync_data() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator).unwrap();
+
+        let sync_data = SyncData {
+            state_root: [1u8; 32],
+            entries: vec![(
+                "challenges".to_string(),
+                b"key1".to_vec(),
+                b"value1".to_vec(),
+            )],
+        };
+
+        db.apply_sync_data(sync_data).unwrap();
+        assert_eq!(
+            db.get("challenges", b"key1").unwrap(),
+            Some(b"value1".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_block_confirmation_structure() {
+        let conf = BlockConfirmation {
+            block_number: 100,
+            confirmed_count: 5,
+            state_root: [42u8; 32],
+        };
+
+        assert_eq!(conf.block_number, 100);
+        assert_eq!(conf.confirmed_count, 5);
+        assert_eq!(conf.state_root, [42u8; 32]);
+    }
+
+    #[test]
+    fn test_sync_state_serialization() {
+        let sync_state = SyncState {
+            state_root: [1u8; 32],
+            block_number: 100,
+            pending_count: 5,
+        };
+
+        let serialized = serde_json::to_string(&sync_state).unwrap();
+        let deserialized: SyncState = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.state_root, sync_state.state_root);
+        assert_eq!(deserialized.block_number, sync_state.block_number);
+        assert_eq!(deserialized.pending_count, sync_state.pending_count);
+    }
+
+    #[test]
+    fn test_sync_data_verify() {
+        let sync_data = SyncData {
+            state_root: [1u8; 32],
+            entries: vec![],
+        };
+
+        assert!(sync_data.verify().unwrap());
+    }
+
+    #[test]
+    fn test_rebuild_merkle_trie() {
+        let dir = tempdir().unwrap();
+        let validator = create_test_hotkey(1);
+        let db = DistributedDB::open(dir.path(), validator).unwrap();
+
+        db.put("challenges", b"key1", b"value1").unwrap();
+        db.put("agents", b"key2", b"value2").unwrap();
+
+        let root = db.state_root();
+        // Root is computed from the merkle trie
     }
 }

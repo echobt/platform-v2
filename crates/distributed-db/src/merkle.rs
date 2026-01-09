@@ -308,4 +308,224 @@ mod tests {
         tampered.value = b"tampered".to_vec();
         assert!(!MerkleTrie::verify_proof(&tampered));
     }
+
+    #[test]
+    fn test_new_trie_is_empty() {
+        let trie = MerkleTrie::new();
+        assert!(trie.is_empty());
+        assert_eq!(trie.len(), 0);
+        assert_eq!(trie.root_hash(), [0u8; 32]);
+    }
+
+    #[test]
+    fn test_default_trie() {
+        let trie = MerkleTrie::default();
+        assert!(trie.is_empty());
+        assert_eq!(trie.len(), 0);
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+        assert_eq!(trie.len(), 2);
+        assert!(!trie.is_empty());
+
+        trie.clear();
+        assert!(trie.is_empty());
+        assert_eq!(trie.len(), 0);
+        assert_eq!(trie.root_hash(), [0u8; 32]);
+        assert_eq!(trie.get(b"key1"), None);
+    }
+
+    #[test]
+    fn test_iter() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+        trie.insert(b"key3", b"value3");
+
+        let mut entries: Vec<_> = trie.iter().collect();
+        entries.sort_by_key(|(k, _)| (*k).clone());
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0], (&b"key1".to_vec(), &b"value1".to_vec()));
+        assert_eq!(entries[1], (&b"key2".to_vec(), &b"value2".to_vec()));
+        assert_eq!(entries[2], (&b"key3".to_vec(), &b"value3".to_vec()));
+    }
+
+    #[test]
+    fn test_get_nonexistent_key() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        assert_eq!(trie.get(b"key2"), None);
+    }
+
+    #[test]
+    fn test_remove_nonexistent_key() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        let removed = trie.remove(b"key2");
+        assert_eq!(removed, None);
+        assert_eq!(trie.len(), 1);
+    }
+
+    #[test]
+    fn test_insert_overwrites() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        assert_eq!(trie.get(b"key1"), Some(&b"value1".to_vec()));
+
+        trie.insert(b"key1", b"value2");
+        assert_eq!(trie.get(b"key1"), Some(&b"value2".to_vec()));
+        assert_eq!(trie.len(), 1);
+    }
+
+    #[test]
+    fn test_root_hash_empty_trie() {
+        let trie = MerkleTrie::new();
+        assert_eq!(trie.root_hash(), [0u8; 32]);
+    }
+
+    #[test]
+    fn test_root_hash_single_entry() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        let hash = trie.root_hash();
+        assert_ne!(hash, [0u8; 32]);
+
+        // Same single entry should produce same hash
+        let mut trie2 = MerkleTrie::new();
+        trie2.insert(b"key1", b"value1");
+        assert_eq!(trie2.root_hash(), hash);
+    }
+
+    #[test]
+    fn test_root_hash_changes_on_insert() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        let hash1 = trie.root_hash();
+
+        trie.insert(b"key2", b"value2");
+        let hash2 = trie.root_hash();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_root_hash_changes_on_remove() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+        let hash1 = trie.root_hash();
+
+        trie.remove(b"key2");
+        let hash2 = trie.root_hash();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_generate_proof_nonexistent_key() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+
+        let proof = trie.generate_proof(b"key3");
+        assert!(proof.is_none());
+    }
+
+    #[test]
+    fn test_generate_proof_empty_trie() {
+        let trie = MerkleTrie::new();
+        let proof = trie.generate_proof(b"key1");
+        assert!(proof.is_none());
+    }
+
+    #[test]
+    fn test_generate_proof_single_entry() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+
+        let proof = trie.generate_proof(b"key1").unwrap();
+        assert_eq!(proof.key, b"key1");
+        assert_eq!(proof.value, b"value1");
+        assert!(MerkleTrie::verify_proof(&proof));
+    }
+
+    #[test]
+    fn test_verify_proof_wrong_root() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+
+        let mut proof = trie.generate_proof(b"key1").unwrap();
+        proof.root = [99u8; 32];
+
+        assert!(!MerkleTrie::verify_proof(&proof));
+    }
+
+    #[test]
+    fn test_verify_proof_wrong_key() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+
+        let mut proof = trie.generate_proof(b"key1").unwrap();
+        proof.key = b"key2".to_vec();
+
+        assert!(!MerkleTrie::verify_proof(&proof));
+    }
+
+    #[test]
+    fn test_merkle_proof_with_odd_number_of_entries() {
+        let mut trie = MerkleTrie::new();
+        trie.insert(b"key1", b"value1");
+        trie.insert(b"key2", b"value2");
+        trie.insert(b"key3", b"value3");
+
+        let proof = trie.generate_proof(b"key3").unwrap();
+        assert!(MerkleTrie::verify_proof(&proof));
+    }
+
+    #[test]
+    fn test_node_empty_hash() {
+        let node = Node::Empty;
+        assert_eq!(node.hash(), [0u8; 32]);
+    }
+
+    #[test]
+    fn test_node_leaf_hash() {
+        let hash = [42u8; 32];
+        let node = Node::Leaf {
+            key: b"key".to_vec(),
+            value: b"value".to_vec(),
+            hash,
+        };
+        assert_eq!(node.hash(), hash);
+    }
+
+    #[test]
+    fn test_node_branch_hash() {
+        let hash = [43u8; 32];
+        let children: [Option<Box<Node>>; 16] = Default::default();
+        let node = Node::Branch {
+            children: Box::new(children),
+            value: Some(b"value".to_vec()),
+            hash,
+        };
+        assert_eq!(node.hash(), hash);
+    }
+
+    #[test]
+    fn test_node_extension_hash() {
+        let hash = [44u8; 32];
+        let node = Node::Extension {
+            prefix: b"prefix".to_vec(),
+            child: Box::new(Node::Empty),
+            hash,
+        };
+        assert_eq!(node.hash(), hash);
+    }
 }

@@ -165,6 +165,7 @@ pub struct DiffEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::*;
 
     #[test]
     fn test_state_history() {
@@ -178,5 +179,236 @@ mod tests {
         assert_eq!(state.root_at_block(101), Some([2u8; 32]));
         assert_eq!(state.root_at_block(102), Some([3u8; 32]));
         assert_eq!(state.latest_block(), Some(102));
+    }
+
+    #[test]
+    fn test_state_manager_new_with_initial_root() {
+        let initial_root = [99u8; 32];
+        let state = StateManager::new(Some(initial_root));
+
+        assert_eq!(state.root(), initial_root);
+    }
+
+    #[test]
+    fn test_state_manager_new_without_initial_root() {
+        let state = StateManager::new(None);
+
+        assert_eq!(state.root(), [0u8; 32]);
+    }
+
+    #[test]
+    fn test_set_root() {
+        let mut state = StateManager::new(None);
+
+        let new_root = [42u8; 32];
+        state.set_root(new_root);
+
+        assert_eq!(state.root(), new_root);
+    }
+
+    #[test]
+    fn test_apply_tx() {
+        let mut state = StateManager::new(None);
+
+        let tx = create_test_tx();
+        state.apply_tx(&tx);
+
+        // Applied txs should be stored
+        assert_eq!(state.applied_txs.len(), 1);
+        assert_eq!(state.applied_txs[0].tx_id, tx.id());
+    }
+
+    #[test]
+    fn test_apply_tx_history_limit() {
+        let mut state = StateManager::new(None);
+
+        // Add more than MAX_HISTORY transactions
+        for _ in 0..(MAX_HISTORY + 100) {
+            let tx = create_test_tx();
+            state.apply_tx(&tx);
+        }
+
+        // Should not exceed MAX_HISTORY
+        assert_eq!(state.applied_txs.len(), MAX_HISTORY);
+    }
+
+    #[test]
+    fn test_commit_block() {
+        let mut state = StateManager::new(None);
+
+        let root1 = [1u8; 32];
+        let root2 = [2u8; 32];
+
+        state.commit_block(100, root1);
+        assert_eq!(state.root(), root1);
+        assert_eq!(state.history.len(), 1);
+
+        state.commit_block(101, root2);
+        assert_eq!(state.root(), root2);
+        assert_eq!(state.history.len(), 2);
+    }
+
+    #[test]
+    fn test_commit_block_history_limit() {
+        let mut state = StateManager::new(None);
+
+        // Add more than MAX_HISTORY blocks
+        for i in 0..(MAX_HISTORY + 100) {
+            state.commit_block(i as u64, [i as u8; 32]);
+        }
+
+        // Should not exceed MAX_HISTORY
+        assert_eq!(state.history.len(), MAX_HISTORY);
+
+        // Oldest entries should be removed
+        assert!(state.root_at_block(0).is_none());
+        assert!(state.root_at_block(99).is_none());
+        // Recent entries should still exist
+        assert!(state.root_at_block(MAX_HISTORY as u64).is_some());
+    }
+
+    #[test]
+    fn test_root_at_block_not_found() {
+        let state = StateManager::new(None);
+
+        assert_eq!(state.root_at_block(999), None);
+    }
+
+    #[test]
+    fn test_latest_block_empty() {
+        let state = StateManager::new(None);
+
+        assert_eq!(state.latest_block(), None);
+    }
+
+    #[test]
+    fn test_latest_block_with_history() {
+        let mut state = StateManager::new(None);
+
+        state.commit_block(100, [1u8; 32]);
+        state.commit_block(200, [2u8; 32]);
+        state.commit_block(150, [3u8; 32]); // Out of order
+
+        // Latest should be the last one added (150)
+        assert_eq!(state.latest_block(), Some(150));
+    }
+
+    #[test]
+    fn test_state_diff() {
+        let mut state = StateManager::new(None);
+
+        state.commit_block(100, [1u8; 32]);
+        state.commit_block(101, [2u8; 32]);
+
+        let diff = state.state_diff(100, 101);
+        assert!(diff.is_some());
+
+        let diff = diff.unwrap();
+        assert_eq!(diff.from_block, 100);
+        assert_eq!(diff.to_block, 101);
+        assert_eq!(diff.from_root, [1u8; 32]);
+        assert_eq!(diff.to_root, [2u8; 32]);
+    }
+
+    #[test]
+    fn test_state_diff_block_not_found() {
+        let mut state = StateManager::new(None);
+
+        state.commit_block(100, [1u8; 32]);
+
+        // One of the blocks doesn't exist
+        assert!(state.state_diff(100, 999).is_none());
+        assert!(state.state_diff(999, 100).is_none());
+    }
+
+    #[test]
+    fn test_history() {
+        let mut state = StateManager::new(None);
+
+        state.commit_block(100, [1u8; 32]);
+        state.commit_block(101, [2u8; 32]);
+        state.commit_block(102, [3u8; 32]);
+
+        let history = state.history();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0], (100, [1u8; 32]));
+        assert_eq!(history[1], (101, [2u8; 32]));
+        assert_eq!(history[2], (102, [3u8; 32]));
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut state = StateManager::new(Some([99u8; 32]));
+
+        state.commit_block(100, [1u8; 32]);
+        state.commit_block(101, [2u8; 32]);
+
+        let tx = create_test_tx();
+        state.apply_tx(&tx);
+
+        state.clear();
+
+        assert_eq!(state.root(), [0u8; 32]);
+        assert_eq!(state.history.len(), 0);
+        assert_eq!(state.applied_txs.len(), 0);
+        assert_eq!(state.latest_block(), None);
+    }
+
+    #[test]
+    fn test_diff_entry() {
+        let entry = DiffEntry {
+            collection: "test".to_string(),
+            key: b"key".to_vec(),
+            old_value: Some(b"old".to_vec()),
+            new_value: Some(b"new".to_vec()),
+        };
+
+        assert_eq!(entry.collection, "test");
+        assert_eq!(entry.old_value, Some(b"old".to_vec()));
+        assert_eq!(entry.new_value, Some(b"new".to_vec()));
+    }
+
+    #[test]
+    fn test_undo_op_put() {
+        let undo_op = UndoOp::Put {
+            collection: "test".to_string(),
+            key: b"key".to_vec(),
+            old_value: Some(b"old".to_vec()),
+        };
+
+        match undo_op {
+            UndoOp::Put {
+                collection,
+                key,
+                old_value,
+            } => {
+                assert_eq!(collection, "test");
+                assert_eq!(key, b"key");
+                assert_eq!(old_value, Some(b"old".to_vec()));
+            }
+            _ => panic!("Expected UndoOp::Put"),
+        }
+    }
+
+    #[test]
+    fn test_undo_op_delete() {
+        let undo_op = UndoOp::Delete {
+            collection: "test".to_string(),
+            key: b"key".to_vec(),
+            old_value: b"value".to_vec(),
+        };
+
+        match undo_op {
+            UndoOp::Delete {
+                collection,
+                key,
+                old_value,
+            } => {
+                assert_eq!(collection, "test");
+                assert_eq!(key, b"key");
+                assert_eq!(old_value, b"value");
+            }
+            _ => panic!("Expected UndoOp::Delete"),
+        }
     }
 }
