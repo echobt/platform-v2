@@ -60,19 +60,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_create_pool_success() {
-        // Test that create_pool can be called with a valid URL
-        // Note: This will fail at runtime if PostgreSQL is not available
-        // but tests syntax and compilation
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let _result = create_pool("postgresql://localhost/test").await;
-            // No assertion - we just verify compilation and type checking
-            // Actual connection will fail without a running database
-        });
-    }
-
-    #[test]
     fn test_db_pool_type() {
         // Test that DbPool is correctly aliased to Pool
         let rt = tokio::runtime::Runtime::new().unwrap();
