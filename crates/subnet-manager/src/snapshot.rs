@@ -321,8 +321,13 @@ impl SnapshotManager {
     }
 
     /// Deserialize bytes to a directory (simplified)
-    fn deserialize_directory(_path: &PathBuf, _data: &[u8]) -> anyhow::Result<()> {
-        // For now, no-op - in production, would untar the directory
+    fn deserialize_directory(path: &PathBuf, data: &[u8]) -> anyhow::Result<()> {
+        // Placeholder implementation: recreate directory and store raw bytes
+        fs::create_dir_all(path)?;
+        if !data.is_empty() {
+            let file_path = path.join("data.bin");
+            fs::write(file_path, data)?;
+        }
         Ok(())
     }
 }
@@ -332,6 +337,158 @@ mod tests {
     use super::*;
     use platform_core::{Keypair, NetworkConfig};
     use tempfile::tempdir;
+
+    #[test]
+    fn test_load_snapshot_index_success() {
+        let dir = tempdir().unwrap();
+        let snapshots_dir = dir.path().join("snapshots");
+        std::fs::create_dir_all(&snapshots_dir).unwrap();
+
+        let meta = SnapshotMeta {
+            id: uuid::Uuid::new_v4(),
+            name: "indexed".into(),
+            block_height: 123,
+            epoch: 4,
+            state_hash: "abc123".into(),
+            created_at: Utc::now(),
+            size_bytes: 42,
+            auto: false,
+            reason: "preloaded".into(),
+        };
+
+        let index_path = snapshots_dir.join("index.json");
+        let content = serde_json::to_string_pretty(&vec![meta.clone()]).unwrap();
+        std::fs::write(index_path, content).unwrap();
+
+        let manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+        let snapshots = manager.list_snapshots();
+        assert_eq!(snapshots.len(), 1);
+        let loaded = &snapshots[0];
+        assert_eq!(loaded.id, meta.id);
+        assert_eq!(loaded.name, "indexed");
+        assert_eq!(loaded.block_height, 123);
+        assert_eq!(loaded.reason, "preloaded");
+    }
+
+    #[test]
+    fn test_create_snapshot_reads_config_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("subnet_config.json");
+        std::fs::write(&config_path, b"{\"dummy\":true}").unwrap();
+
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap();
+
+        let kp = Keypair::generate();
+        let state = ChainState::new(kp.hotkey(), NetworkConfig::default());
+
+        let id = manager
+            .create_snapshot("config_snapshot", 50, 2, &state, "test", false)
+            .unwrap();
+
+        let snapshot = manager.restore_snapshot(id).unwrap();
+        assert_eq!(snapshot.config, b"{\"dummy\":true}".to_vec());
+    }
+
+    #[test]
+    fn test_restore_snapshot_detects_hash_mismatch() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap();
+
+        let kp = Keypair::generate();
+        let state = ChainState::new(kp.hotkey(), NetworkConfig::default());
+
+        let id = manager
+            .create_snapshot("corruptible", 42, 1, &state, "test", false)
+            .unwrap();
+
+        // Corrupt the stored snapshot by altering the recorded hash
+        let snapshot_path = dir
+            .path()
+            .join("snapshots")
+            .join(format!("{}.snapshot", id));
+        let bytes = std::fs::read(&snapshot_path).unwrap();
+        let mut snapshot: Snapshot = bincode::deserialize(&bytes).unwrap();
+        snapshot.meta.state_hash = "bad-hash".into();
+        let corrupt = bincode::serialize(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, corrupt).unwrap();
+
+        let result = manager.restore_snapshot(id);
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("hash mismatch"));
+    }
+
+    #[test]
+    fn test_apply_snapshot_restores_config_and_challenges() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap();
+
+        // Prepare snapshot contents
+        let kp = Keypair::generate();
+        let state = ChainState::new(kp.hotkey(), NetworkConfig::default());
+        let mut snapshot = Snapshot {
+            meta: SnapshotMeta {
+                id: uuid::Uuid::new_v4(),
+                name: "apply_test".into(),
+                block_height: 1,
+                epoch: 1,
+                state_hash: "hash".into(),
+                created_at: Utc::now(),
+                size_bytes: 0,
+                auto: false,
+                reason: "test".into(),
+            },
+            chain_state: bincode::serialize(&state).unwrap(),
+            challenge_data: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("challengeA".into(), b"placeholder".to_vec());
+                map
+            },
+            config: br#"{"foo":"bar"}"#.to_vec(),
+        };
+
+        // Save the snapshot file and metadata index manually
+        let snapshot_path = manager
+            .snapshots_dir
+            .join(format!("{}.snapshot", snapshot.meta.id));
+        snapshot.meta.state_hash = SnapshotManager::compute_hash(&snapshot.chain_state);
+        let bytes = bincode::serialize(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, &bytes).unwrap();
+        snapshot.meta.size_bytes = bytes.len() as u64;
+        manager.snapshots.push(snapshot.meta.clone());
+        manager.save_snapshot_index().unwrap();
+
+        let restored = manager.restore_snapshot(snapshot.meta.id).unwrap();
+        let new_state = manager.apply_snapshot(&restored).unwrap();
+        assert_eq!(new_state.block_height, state.block_height);
+
+        // Config file should exist with snapshot contents
+        let config_path = manager.data_dir.join("subnet_config.json");
+        let config_contents = std::fs::read(&config_path).unwrap();
+        assert_eq!(config_contents, br#"{"foo":"bar"}"#);
+
+        // Challenge directory should be recreated with db contents
+        let challenge_dir = manager
+            .data_dir
+            .join("challenges")
+            .join("challengeA");
+        let db_path = challenge_dir.join("db");
+        let data_file = db_path.join("data.bin");
+        assert!(db_path.exists());
+        assert_eq!(std::fs::read(data_file).unwrap(), b"placeholder".to_vec());
+    }
+
+    #[test]
+    fn test_deserialize_directory_creates_structure() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("nested").join("db");
+
+        SnapshotManager::deserialize_directory(&target, b"hello").unwrap();
+
+        let data_path = target.join("data.bin");
+        assert!(target.exists());
+        assert!(data_path.exists());
+        assert_eq!(std::fs::read(data_path).unwrap(), b"hello");
+    }
 
     #[test]
     fn test_snapshot_meta_fields() {
