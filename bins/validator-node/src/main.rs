@@ -841,9 +841,10 @@ async fn handle_block_event(
                                 let mut total_weight: f64 = 0.0;
 
                                 for (hotkey, weight_f64) in &w {
+                                    // Apply emission_weight: scale the challenge weight
+                                    let scaled_weight = weight_f64 * emission_weight;
+
                                     if let Some(uid) = client_guard.get_uid_for_hotkey(hotkey) {
-                                        // Apply emission_weight: scale the challenge weight
-                                        let scaled_weight = weight_f64 * emission_weight;
                                         // Convert f64 weight (0.0-1.0) to u16 (0-65535)
                                         let weight_u16 = (scaled_weight * 65535.0).round() as u16;
                                         uids.push(uid);
@@ -859,16 +860,19 @@ async fn handle_block_event(
                                             weight_u16
                                         );
                                     } else {
+                                        // Hotkey not in metagraph - this weight goes to burn
                                         warn!(
-                                            "Hotkey {} not found in metagraph, skipping",
-                                            &hotkey[..16]
+                                            "Hotkey {} not found in metagraph, weight {:.4} goes to burn",
+                                            &hotkey[..16],
+                                            scaled_weight
                                         );
+                                        // Don't add to total_weight - it will be added to burn below
                                     }
                                 }
                                 drop(client_guard);
 
                                 // Add remaining weight to burn (UID 0)
-                                // remaining = 1.0 - emission_weight (goes to burn)
+                                // This includes: (1 - emission_weight) + any unresolved hotkey weights
                                 let burn_weight = 1.0 - total_weight;
                                 if burn_weight > 0.001 {
                                     let burn_u16 = (burn_weight * 65535.0).round() as u16;
