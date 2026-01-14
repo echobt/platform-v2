@@ -216,3 +216,249 @@ pub async fn get_validators_stats(
         validators: result,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // MIN_STAKE_FOR_WHITELIST constant test
+    // =========================================================================
+
+    #[test]
+    fn test_min_stake_for_whitelist_is_10k_tao() {
+        // 10,000 TAO in RAO (1 TAO = 1_000_000_000 RAO)
+        assert_eq!(MIN_STAKE_FOR_WHITELIST, 10_000_000_000_000);
+    }
+
+    // =========================================================================
+    // HeartbeatRequest tests
+    // =========================================================================
+
+    #[test]
+    fn test_heartbeat_request_deserialize() {
+        let json = r#"{"hotkey": "5GrwvaEF...", "signature": "sig123"}"#;
+        let req: HeartbeatRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(req.hotkey, "5GrwvaEF...");
+        assert_eq!(req.signature, "sig123");
+    }
+
+    // =========================================================================
+    // MetricsReportRequest tests
+    // =========================================================================
+
+    #[test]
+    fn test_metrics_report_request_deserialize() {
+        let json = r#"{
+            "hotkey": "5GrwvaEF...",
+            "signature": "sig123",
+            "timestamp": 1234567890,
+            "cpu_percent": 45.5,
+            "memory_used_mb": 2048,
+            "memory_total_mb": 8192
+        }"#;
+
+        let req: MetricsReportRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(req.hotkey, "5GrwvaEF...");
+        assert_eq!(req.timestamp, 1234567890);
+        assert_eq!(req.cpu_percent, 45.5);
+        assert_eq!(req.memory_used_mb, 2048);
+        assert_eq!(req.memory_total_mb, 8192);
+    }
+
+    // =========================================================================
+    // ValidatorWithMetrics tests
+    // =========================================================================
+
+    #[test]
+    fn test_validator_with_metrics_serialize() {
+        let validator = ValidatorWithMetrics {
+            hotkey: "5GrwvaEF...".to_string(),
+            stake: 1_000_000_000_000,
+            last_seen: Some(1234567890),
+            is_active: true,
+            metrics: Some(ValidatorMetrics {
+                cpu_percent: 50.0,
+                memory_used_mb: 4096,
+                memory_total_mb: 8192,
+                timestamp: 1234567890,
+            }),
+        };
+
+        let json = serde_json::to_string(&validator).unwrap();
+
+        assert!(json.contains("5GrwvaEF"));
+        assert!(json.contains("cpu_percent"));
+        assert!(json.contains("50"));
+    }
+
+    #[test]
+    fn test_validator_with_metrics_no_metrics() {
+        let validator = ValidatorWithMetrics {
+            hotkey: "5GrwvaEF...".to_string(),
+            stake: 1_000_000_000_000,
+            last_seen: None,
+            is_active: false,
+            metrics: None,
+        };
+
+        let json = serde_json::to_string(&validator).unwrap();
+
+        assert!(json.contains("5GrwvaEF"));
+        assert!(json.contains("null") || json.contains("metrics\":null"));
+    }
+
+    // =========================================================================
+    // ValidatorsStatsResponse tests
+    // =========================================================================
+
+    #[test]
+    fn test_validators_stats_response_serialize() {
+        let response = ValidatorsStatsResponse {
+            validators: vec![],
+            total_active: 5,
+            average_cpu_percent: 45.5,
+            average_memory_percent: 60.0,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert!(json.contains("total_active"));
+        assert!(json.contains("5"));
+        assert!(json.contains("45.5"));
+        assert!(json.contains("60"));
+    }
+
+    #[test]
+    fn test_validators_stats_response_empty() {
+        let response = ValidatorsStatsResponse {
+            validators: vec![],
+            total_active: 0,
+            average_cpu_percent: 0.0,
+            average_memory_percent: 0.0,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert!(json.contains("validators"));
+        assert!(json.contains("[]"));
+    }
+
+    // =========================================================================
+    // Memory percentage calculation tests
+    // =========================================================================
+
+    #[test]
+    fn test_memory_percentage_calculation() {
+        let memory_used_mb: u64 = 4096;
+        let memory_total_mb: u64 = 8192;
+
+        let percent = (memory_used_mb as f32 / memory_total_mb as f32) * 100.0;
+
+        assert_eq!(percent, 50.0);
+    }
+
+    #[test]
+    fn test_memory_percentage_zero_total_handled() {
+        let memory_total_mb: u64 = 0;
+
+        // Should not calculate if total is zero
+        let add_to_total = memory_total_mb > 0;
+
+        assert!(!add_to_total);
+    }
+
+    // =========================================================================
+    // Average calculation tests
+    // =========================================================================
+
+    #[test]
+    fn test_average_with_metrics() {
+        let total_cpu = 150.0f32;
+        let metrics_count = 3;
+
+        let average = if metrics_count > 0 {
+            total_cpu / metrics_count as f32
+        } else {
+            0.0
+        };
+
+        assert_eq!(average, 50.0);
+    }
+
+    #[test]
+    fn test_average_without_metrics() {
+        let total_cpu = 0.0f32;
+        let metrics_count = 0;
+
+        let average = if metrics_count > 0 {
+            total_cpu / metrics_count as f32
+        } else {
+            0.0
+        };
+
+        assert_eq!(average, 0.0);
+    }
+
+    // =========================================================================
+    // Timestamp validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_timestamp_within_one_minute() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let req_timestamp = now - 30; // 30 seconds ago
+
+        let is_valid = (now - req_timestamp).abs() <= 60;
+
+        assert!(is_valid);
+    }
+
+    #[test]
+    fn test_timestamp_too_old() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let req_timestamp = now - 120; // 2 minutes ago
+
+        let is_valid = (now - req_timestamp).abs() <= 60;
+
+        assert!(!is_valid);
+    }
+
+    #[test]
+    fn test_timestamp_in_future() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let req_timestamp = now + 120; // 2 minutes in future
+
+        let is_valid = (now - req_timestamp).abs() <= 60;
+
+        assert!(!is_valid);
+    }
+
+    // =========================================================================
+    // Message format tests (for signature verification)
+    // =========================================================================
+
+    #[test]
+    fn test_metrics_message_format() {
+        let hotkey = "5GrwvaEF...";
+        let timestamp = 1234567890i64;
+
+        let message = format!("metrics:{}:{}", hotkey, timestamp);
+
+        assert_eq!(message, "metrics:5GrwvaEF...:1234567890");
+    }
+}

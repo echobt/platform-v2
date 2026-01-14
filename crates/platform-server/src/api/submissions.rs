@@ -104,3 +104,130 @@ pub async fn submit_agent(
         }),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // get_term_challenge_url tests
+    // =========================================================================
+
+    #[test]
+    fn test_get_term_challenge_url_default() {
+        // When env var is not set, should return default
+        std::env::remove_var("TERM_CHALLENGE_URL");
+        let url = get_term_challenge_url();
+        assert_eq!(url, "http://localhost:8081");
+    }
+
+    #[test]
+    fn test_get_term_challenge_url_from_env() {
+        std::env::set_var("TERM_CHALLENGE_URL", "http://custom:9000");
+        let url = get_term_challenge_url();
+        assert_eq!(url, "http://custom:9000");
+        std::env::remove_var("TERM_CHALLENGE_URL");
+    }
+
+    // =========================================================================
+    // ListSubmissionsQuery tests
+    // =========================================================================
+
+    #[test]
+    fn test_list_submissions_query_deserialize_empty() {
+        let json = "{}";
+        let query: ListSubmissionsQuery = serde_json::from_str(json).unwrap();
+        assert!(query.limit.is_none());
+        assert!(query.status.is_none());
+    }
+
+    #[test]
+    fn test_list_submissions_query_deserialize_with_values() {
+        let json = r#"{"limit": 50, "status": "pending"}"#;
+        let query: ListSubmissionsQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.limit, Some(50));
+        assert_eq!(query.status, Some("pending".to_string()));
+    }
+
+    #[test]
+    fn test_list_submissions_query_deserialize_limit_only() {
+        let json = r#"{"limit": 25}"#;
+        let query: ListSubmissionsQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.limit, Some(25));
+        assert!(query.status.is_none());
+    }
+
+    // =========================================================================
+    // Deprecation response format tests
+    // =========================================================================
+
+    #[test]
+    fn test_submit_agent_response_error_format() {
+        let response = SubmitAgentResponse {
+            success: false,
+            submission_id: None,
+            agent_hash: None,
+            error: Some("Test error message".to_string()),
+        };
+
+        assert!(!response.success);
+        assert!(response.submission_id.is_none());
+        assert!(response.agent_hash.is_none());
+        assert_eq!(response.error, Some("Test error message".to_string()));
+    }
+
+    #[test]
+    fn test_submit_agent_response_success_format() {
+        let response = SubmitAgentResponse {
+            success: true,
+            submission_id: Some("sub-123".to_string()),
+            agent_hash: Some("hash-456".to_string()),
+            error: None,
+        };
+
+        assert!(response.success);
+        assert_eq!(response.submission_id, Some("sub-123".to_string()));
+        assert_eq!(response.agent_hash, Some("hash-456".to_string()));
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_source_code_migration_response_contains_endpoints() {
+        let response = serde_json::json!({
+            "error": "Source code access has been migrated to term-challenge",
+            "message": "Use the term-challenge API to access source code with proper authentication",
+            "term_challenge_url": get_term_challenge_url(),
+            "endpoints": {
+                "owner_source": "POST /api/v1/my/agents/:hash/source",
+                "validator_claim": "POST /api/v1/validator/claim_job"
+            }
+        });
+
+        assert!(response["endpoints"]["owner_source"].as_str().is_some());
+        assert!(response["endpoints"]["validator_claim"].as_str().is_some());
+    }
+
+    // =========================================================================
+    // Limit handling tests
+    // =========================================================================
+
+    #[test]
+    fn test_default_limit_is_100() {
+        let query = ListSubmissionsQuery {
+            limit: None,
+            status: None,
+        };
+        let limit = query.limit.unwrap_or(100);
+        assert_eq!(limit, 100);
+    }
+
+    #[test]
+    fn test_custom_limit_preserved() {
+        let query = ListSubmissionsQuery {
+            limit: Some(50),
+            status: None,
+        };
+        let limit = query.limit.unwrap_or(100);
+        assert_eq!(limit, 50);
+    }
+}

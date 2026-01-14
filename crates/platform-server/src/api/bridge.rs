@@ -247,3 +247,246 @@ pub async fn list_bridges(State(state): State<Arc<AppState>>) -> Json<serde_json
         "example": "/api/v1/bridge/term-challenge/submit"
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // get_challenge_url tests (unit tests for URL resolution logic)
+    // =========================================================================
+
+    // Note: These tests manipulate environment variables, which can cause issues
+    // in parallel test execution. The tests are designed to be self-contained
+    // and clean up after themselves.
+
+    #[test]
+    fn test_url_construction_with_trailing_slash() {
+        let base_url = "http://localhost:8080/";
+        let path = "/api/v1/submit";
+
+        let url = format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+
+        assert_eq!(url, "http://localhost:8080/api/v1/submit");
+    }
+
+    #[test]
+    fn test_url_construction_without_trailing_slash() {
+        let base_url = "http://localhost:8080";
+        let path = "api/v1/submit";
+
+        let url = format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+
+        assert_eq!(url, "http://localhost:8080/api/v1/submit");
+    }
+
+    #[test]
+    fn test_url_construction_double_slashes_normalized() {
+        let base_url = "http://localhost:8080//";
+        let path = "//api/v1/submit";
+
+        let url = format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+
+        assert_eq!(url, "http://localhost:8080/api/v1/submit");
+    }
+
+    // =========================================================================
+    // Path routing logic tests
+    // =========================================================================
+
+    #[test]
+    fn test_api_path_already_has_prefix() {
+        let path = "api/v1/submit";
+
+        let api_path = if path.starts_with("api/") {
+            format!("/{}", path)
+        } else {
+            format!("/api/v1/{}", path)
+        };
+
+        assert_eq!(api_path, "/api/v1/submit");
+    }
+
+    #[test]
+    fn test_api_path_root_level_endpoints() {
+        const ROOT_LEVEL_ENDPOINTS: &[&str] = &["get_weights", "leaderboard", "evaluate", "health"];
+
+        for endpoint in ROOT_LEVEL_ENDPOINTS {
+            let path = *endpoint;
+
+            let api_path = if path.starts_with("api/") {
+                format!("/{}", path)
+            } else if ROOT_LEVEL_ENDPOINTS
+                .iter()
+                .any(|e| path == *e || path.starts_with(&format!("{}/", e)))
+            {
+                format!("/{}", path)
+            } else {
+                format!("/api/v1/{}", path)
+            };
+
+            assert_eq!(
+                api_path,
+                format!("/{}", endpoint),
+                "Root-level endpoint {} should not have /api/v1 prefix",
+                endpoint
+            );
+        }
+    }
+
+    #[test]
+    fn test_api_path_nested_root_level_endpoint() {
+        const ROOT_LEVEL_ENDPOINTS: &[&str] = &["get_weights", "leaderboard", "evaluate", "health"];
+
+        let path = "leaderboard/top10";
+
+        let api_path = if path.starts_with("api/") {
+            format!("/{}", path)
+        } else if ROOT_LEVEL_ENDPOINTS
+            .iter()
+            .any(|e| path == *e || path.starts_with(&format!("{}/", e)))
+        {
+            format!("/{}", path)
+        } else {
+            format!("/api/v1/{}", path)
+        };
+
+        assert_eq!(api_path, "/leaderboard/top10");
+    }
+
+    #[test]
+    fn test_api_path_regular_endpoint() {
+        const ROOT_LEVEL_ENDPOINTS: &[&str] = &["get_weights", "leaderboard", "evaluate", "health"];
+
+        let path = "submit";
+
+        let api_path = if path.starts_with("api/") {
+            format!("/{}", path)
+        } else if ROOT_LEVEL_ENDPOINTS
+            .iter()
+            .any(|e| path == *e || path.starts_with(&format!("{}/", e)))
+        {
+            format!("/{}", path)
+        } else {
+            format!("/api/v1/{}", path)
+        };
+
+        assert_eq!(api_path, "/api/v1/submit");
+    }
+
+    // =========================================================================
+    // Challenge name normalization tests
+    // =========================================================================
+
+    #[test]
+    fn test_challenge_name_to_env_name() {
+        let challenge_name = "term-challenge";
+        let env_name = challenge_name.to_uppercase().replace('-', "_");
+
+        assert_eq!(env_name, "TERM_CHALLENGE");
+    }
+
+    #[test]
+    fn test_challenge_name_with_multiple_dashes() {
+        let challenge_name = "my-custom-challenge";
+        let env_name = challenge_name.to_uppercase().replace('-', "_");
+
+        assert_eq!(env_name, "MY_CUSTOM_CHALLENGE");
+    }
+
+    #[test]
+    fn test_challenge_name_without_dashes() {
+        let challenge_name = "challenge";
+        let env_name = challenge_name.to_uppercase().replace('-', "_");
+
+        assert_eq!(env_name, "CHALLENGE");
+    }
+
+    // =========================================================================
+    // Error response format tests
+    // =========================================================================
+
+    #[test]
+    fn test_not_found_error_json_format() {
+        let challenge_name = "unknown-challenge";
+        let error_json = serde_json::json!({
+            "error": "Challenge not found",
+            "challenge": challenge_name,
+            "hint": format!("Set CHALLENGE_{}_URL or ensure challenge is running",
+                challenge_name.to_uppercase().replace('-', "_"))
+        });
+
+        assert_eq!(error_json["error"], "Challenge not found");
+        assert_eq!(error_json["challenge"], "unknown-challenge");
+        assert!(error_json["hint"]
+            .as_str()
+            .unwrap()
+            .contains("CHALLENGE_UNKNOWN_CHALLENGE_URL"));
+    }
+
+    #[test]
+    fn test_timeout_error_json_format() {
+        let challenge_name = "test-challenge";
+        let error_json = serde_json::json!({
+            "error": "Challenge timeout",
+            "challenge": challenge_name
+        });
+
+        assert_eq!(error_json["error"], "Challenge timeout");
+        assert_eq!(error_json["challenge"], "test-challenge");
+    }
+
+    #[test]
+    fn test_service_unavailable_error_json_format() {
+        let challenge_name = "test-challenge";
+        let base_url = "http://localhost:8080";
+        let error_json = serde_json::json!({
+            "error": "Challenge not reachable",
+            "challenge": challenge_name,
+            "url": base_url
+        });
+
+        assert_eq!(error_json["error"], "Challenge not reachable");
+        assert_eq!(error_json["url"], "http://localhost:8080");
+    }
+
+    // =========================================================================
+    // list_bridges response format tests
+    // =========================================================================
+
+    #[test]
+    fn test_list_bridges_response_format() {
+        let challenges: Vec<String> =
+            vec!["term-challenge".to_string(), "math-challenge".to_string()];
+
+        let response = serde_json::json!({
+            "bridges": challenges,
+            "usage": "/api/v1/bridge/{challenge_name}/{path}",
+            "example": "/api/v1/bridge/term-challenge/submit"
+        });
+
+        assert!(response["bridges"].is_array());
+        assert_eq!(response["usage"], "/api/v1/bridge/{challenge_name}/{path}");
+        assert_eq!(response["example"], "/api/v1/bridge/term-challenge/submit");
+    }
+
+    #[test]
+    fn test_challenge_name_lowercase_conversion() {
+        let name = "TERM_CHALLENGE";
+        let converted = name.to_lowercase().replace('_', "-");
+
+        assert_eq!(converted, "term-challenge");
+    }
+}

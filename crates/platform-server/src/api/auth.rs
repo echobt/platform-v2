@@ -137,3 +137,238 @@ pub fn verify_signature(hotkey_ss58: &str, message: &str, signature_hex: &str) -
 
     is_valid
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sp_core::Pair;
+
+    /// Helper to generate a valid sr25519 keypair for testing
+    fn generate_test_keypair() -> sr25519::Pair {
+        sr25519::Pair::generate().0
+    }
+
+    /// Helper to get SS58 address from keypair
+    fn get_ss58_address(pair: &sr25519::Pair) -> String {
+        use sp_core::crypto::Ss58Codec;
+        pair.public().to_ss58check()
+    }
+
+    /// Helper to sign a message and return hex-encoded signature
+    fn sign_message(pair: &sr25519::Pair, message: &str) -> String {
+        let signature = pair.sign(message.as_bytes());
+        hex::encode(signature.0)
+    }
+
+    // =========================================================================
+    // verify_signature tests
+    // =========================================================================
+
+    #[test]
+    fn test_verify_signature_valid() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "test message for signing";
+        let signature = sign_message(&pair, message);
+
+        assert!(
+            verify_signature(&hotkey, message, &signature),
+            "Valid signature should be verified successfully"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_invalid_signature() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "test message";
+
+        // Create a different keypair and sign with it
+        let other_pair = generate_test_keypair();
+        let wrong_signature = sign_message(&other_pair, message);
+
+        assert!(
+            !verify_signature(&hotkey, message, &wrong_signature),
+            "Signature from different key should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_wrong_message() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let original_message = "original message";
+        let signature = sign_message(&pair, original_message);
+
+        // Try to verify with a different message
+        let tampered_message = "tampered message";
+        assert!(
+            !verify_signature(&hotkey, tampered_message, &signature),
+            "Signature for different message should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_invalid_hotkey_format() {
+        let pair = generate_test_keypair();
+        let message = "test message";
+        let signature = sign_message(&pair, message);
+
+        // Invalid SS58 format
+        assert!(
+            !verify_signature("invalid_hotkey_format", message, &signature),
+            "Invalid hotkey format should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_invalid_hex_signature() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "test message";
+
+        // Not valid hex
+        assert!(
+            !verify_signature(&hotkey, message, "not_valid_hex_zzz"),
+            "Invalid hex signature should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_wrong_length() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "test message";
+
+        // Valid hex but wrong length (should be 64 bytes = 128 hex chars)
+        let short_signature = "abcd1234";
+        assert!(
+            !verify_signature(&hotkey, message, short_signature),
+            "Signature with wrong length should be rejected"
+        );
+
+        // Too long signature
+        let long_signature = "a".repeat(256);
+        assert!(
+            !verify_signature(&hotkey, message, &long_signature),
+            "Signature that's too long should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_empty_message() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "";
+        let signature = sign_message(&pair, message);
+
+        assert!(
+            verify_signature(&hotkey, message, &signature),
+            "Empty message should still be signable and verifiable"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_unicode_message() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "Hello 世界 🌍 مرحبا";
+        let signature = sign_message(&pair, message);
+
+        assert!(
+            verify_signature(&hotkey, message, &signature),
+            "Unicode messages should be handled correctly"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_auth_message_format() {
+        // Test the exact message format used in authenticate()
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let timestamp = 1234567890i64;
+        let role = AuthRole::Validator;
+
+        let message = format!("auth:{}:{}:{:?}", hotkey, timestamp, role);
+        let signature = sign_message(&pair, &message);
+
+        assert!(
+            verify_signature(&hotkey, &message, &signature),
+            "Auth message format should be verifiable"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_ws_connect_format() {
+        // Test the message format used in WebSocket handler
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let timestamp = 1234567890i64;
+
+        let message = format!("ws_connect:{}:{}", hotkey, timestamp);
+        let signature = sign_message(&pair, &message);
+
+        assert!(
+            verify_signature(&hotkey, &message, &signature),
+            "WS connect message format should be verifiable"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_case_sensitive_hotkey() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "test message";
+        let signature = sign_message(&pair, message);
+
+        // Modify case of hotkey (SS58 is case-sensitive)
+        let modified_hotkey = if hotkey.chars().next().unwrap().is_uppercase() {
+            hotkey.to_lowercase()
+        } else {
+            hotkey.to_uppercase()
+        };
+
+        assert!(
+            !verify_signature(&modified_hotkey, message, &signature),
+            "Modified case hotkey should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_all_zeros() {
+        let pair = generate_test_keypair();
+        let hotkey = get_ss58_address(&pair);
+        let message = "test message";
+
+        // 64 bytes of zeros
+        let zero_signature = "0".repeat(128);
+        assert!(
+            !verify_signature(&hotkey, message, &zero_signature),
+            "All-zero signature should be rejected"
+        );
+    }
+
+    // =========================================================================
+    // now() helper function tests
+    // =========================================================================
+
+    #[test]
+    fn test_now_returns_reasonable_timestamp() {
+        let timestamp = now();
+
+        // Should be after year 2020 (1577836800)
+        assert!(timestamp > 1577836800, "Timestamp should be after 2020");
+
+        // Should be before year 2100 (4102444800)
+        assert!(timestamp < 4102444800, "Timestamp should be before 2100");
+    }
+
+    #[test]
+    fn test_now_is_monotonic() {
+        let t1 = now();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let t2 = now();
+
+        assert!(t2 >= t1, "Time should not go backwards");
+    }
+}
