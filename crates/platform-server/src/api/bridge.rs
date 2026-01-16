@@ -89,11 +89,23 @@ async fn proxy_to_challenge(
         }
     };
 
-    let url = format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
+    // Extract query string from original request URI before consuming the body
+    let query_string = request.uri().query().map(|s| s.to_string());
+
+    // Build URL with query params preserved
+    let url = match &query_string {
+        Some(qs) => format!(
+            "{}/{}?{}",
+            base_url.trim_end_matches('/'),
+            path.trim_start_matches('/'),
+            qs
+        ),
+        None => format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        ),
+    };
     debug!(
         "Proxying to challenge '{}': {} -> {}",
         challenge_name, path, url
