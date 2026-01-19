@@ -1019,6 +1019,37 @@ async fn handle_block_event(
                         }
                     }
 
+                    // Add missing emission to burn (UID 0) to ensure weights sum to 1.0
+                    // This preserves the correct proportions for each challenge's emission_weight
+                    let total_emission: f64 = challenges
+                        .iter()
+                        .filter(|c| c.is_healthy)
+                        .map(|c| c.emission_weight.clamp(0.0, 1.0))
+                        .sum();
+
+                    if total_emission < 0.999 {
+                        let missing_emission = 1.0 - total_emission;
+                        info!(
+                            "Total emission from healthy challenges: {:.4}, adding {:.4} to burn",
+                            total_emission, missing_emission
+                        );
+                        // Add missing emission to burn for each mechanism that has weights
+                        // If no mechanisms have weights yet, create one for mechanism 0
+                        if mechanism_uid_weights.is_empty() {
+                            mechanism_uid_weights
+                                .entry(0)
+                                .or_default()
+                                .insert(0, missing_emission);
+                        } else {
+                            // Distribute missing emission proportionally across mechanisms
+                            // For simplicity, add to the first mechanism (they share the same burn UID 0)
+                            if let Some((_, uid_weights)) = mechanism_uid_weights.iter_mut().next()
+                            {
+                                *uid_weights.entry(0).or_insert(0.0) += missing_emission;
+                            }
+                        }
+                    }
+
                     // Convert HashMap<mechanism_id, HashMap<uid, weight_f64>> to Vec<(mech, uids, weights_u16)>
                     let mut weights: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
 
@@ -1027,7 +1058,7 @@ async fn handle_block_event(
                             continue;
                         }
 
-                        // Normalize weights to sum to 1.0, then convert to u16
+                        // Total should now be ~1.0 after adding missing emission
                         let total: f64 = uid_weights.values().sum();
                         if total <= 0.0 {
                             // Should not happen, but fallback to 100% burn
@@ -1040,6 +1071,7 @@ async fn handle_block_event(
                         }
 
                         let uids: Vec<u16> = uid_weights.keys().copied().collect();
+                        // Normalize by total (should be ~1.0 now)
                         let vals_f64: Vec<f64> = uids
                             .iter()
                             .map(|uid| uid_weights.get(uid).copied().unwrap_or(0.0) / total)
