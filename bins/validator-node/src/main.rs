@@ -911,9 +911,13 @@ async fn handle_block_event(
                 subtensor_client.as_ref(),
             ) {
                 // Get weights from platform-server using cached challenges
+                // IMPORTANT: Multiple challenges may share the same mechanism_id
+                // We must merge weights by mechanism before submitting
                 let challenges = cached_challenges.read().clone();
                 let mechanism_weights = if !challenges.is_empty() {
-                    let mut weights = Vec::new();
+                    // Collect weights per mechanism: HashMap<mechanism_id, HashMap<uid, weight_u32>>
+                    // Using u32 for intermediate accumulation to avoid overflow
+                    let mut mechanism_uid_weights: HashMap<u8, HashMap<u16, u32>> = HashMap::new();
 
                     for challenge in challenges.iter() {
                         // Skip unhealthy challenges - don't send burn, just skip
@@ -930,11 +934,13 @@ async fn handle_block_event(
                             Ok(w) if !w.is_empty() => {
                                 // Get challenge emission weight (0.0-1.0)
                                 let emission_weight = challenge.emission_weight.clamp(0.0, 1.0);
+                                let mech_id = challenge.mechanism_id as u8;
+
+                                // Get or create the UID->weight map for this mechanism
+                                let uid_weights = mechanism_uid_weights.entry(mech_id).or_default();
 
                                 // Convert hotkeys to UIDs using metagraph
                                 let client_guard = client.read();
-                                let mut uids = Vec::new();
-                                let mut vals = Vec::new();
                                 let mut total_weight: f64 = 0.0;
 
                                 for (hotkey, weight_f64) in &w {
@@ -944,11 +950,12 @@ async fn handle_block_event(
                                     if let Some(uid) = client_guard.get_uid_for_hotkey(hotkey) {
                                         // Convert f64 weight (0.0-1.0) to u16 (0-65535)
                                         let weight_u16 = (scaled_weight * 65535.0).round() as u16;
-                                        uids.push(uid);
-                                        vals.push(weight_u16);
+                                        // Accumulate weight for this UID
+                                        *uid_weights.entry(uid).or_insert(0) += weight_u16 as u32;
                                         total_weight += scaled_weight;
                                         info!(
-                                            "  {} -> UID {} (weight: {:.4} * {:.2} = {:.4} = {})",
+                                            "  [{}] {} -> UID {} (weight: {:.4} * {:.2} = {:.4} = {})",
+                                            challenge.id,
                                             &hotkey[..16],
                                             uid,
                                             weight_f64,
@@ -973,50 +980,17 @@ async fn handle_block_event(
                                 let burn_weight = 1.0 - total_weight;
                                 if burn_weight > 0.001 {
                                     let burn_u16 = (burn_weight * 65535.0).round() as u16;
-                                    // Check if UID 0 already exists, if not add it
-                                    if let Some(pos) = uids.iter().position(|&u| u == 0) {
-                                        vals[pos] = vals[pos].saturating_add(burn_u16);
-                                    } else {
-                                        uids.push(0);
-                                        vals.push(burn_u16);
-                                    }
-                                    info!("  Burn (UID 0): {:.4} = {}", burn_weight, burn_u16);
-                                }
-
-                                if !uids.is_empty() {
-                                    // Max-upscale weights so largest = 65535
-                                    // This matches Python's convert_weights_and_uids_for_emit behavior
-                                    let max_val = *vals.iter().max().unwrap() as f64;
-                                    if max_val > 0.0 && max_val < 65535.0 {
-                                        vals = vals
-                                            .iter()
-                                            .map(|v| {
-                                                ((*v as f64 / max_val) * 65535.0).round() as u16
-                                            })
-                                            .collect();
-                                    }
-
+                                    *uid_weights.entry(0).or_insert(0) += burn_u16 as u32;
                                     info!(
-                                        "Challenge {} (mech {}, emission_weight={:.2}): {} weights (max-upscaled)",
-                                        challenge.id,
-                                        challenge.mechanism_id,
-                                        emission_weight,
-                                        uids.len()
+                                        "  [{}] Burn (UID 0): {:.4} = {}",
+                                        challenge.id, burn_weight, burn_u16
                                     );
-                                    debug!("  UIDs: {:?}, Weights: {:?}", uids, vals);
-                                    weights.push((challenge.mechanism_id as u8, uids, vals));
-                                } else {
-                                    // No UIDs resolved - send 100% to burn for this mechanism
-                                    warn!(
-                                        "Challenge {} has weights but no UIDs resolved - sending 100% burn",
-                                        challenge.id
-                                    );
-                                    weights.push((
-                                        challenge.mechanism_id as u8,
-                                        vec![0u16],
-                                        vec![65535u16],
-                                    ));
                                 }
+
+                                info!(
+                                    "Challenge {} (mech {}, emission_weight={:.2}): collected weights",
+                                    challenge.id, challenge.mechanism_id, emission_weight
+                                );
                             }
                             Ok(_) => {
                                 // No weights returned - skip, chain keeps existing weights
@@ -1034,6 +1008,43 @@ async fn handle_block_event(
                                 );
                             }
                         }
+                    }
+
+                    // Convert HashMap<mechanism_id, HashMap<uid, weight>> to Vec<(mech, uids, weights)>
+                    // Apply max-upscaling per mechanism
+                    let mut weights: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
+
+                    for (mech_id, uid_weights) in mechanism_uid_weights {
+                        if uid_weights.is_empty() {
+                            continue;
+                        }
+
+                        let uids: Vec<u16> = uid_weights.keys().copied().collect();
+                        let mut vals: Vec<u16> = uids
+                            .iter()
+                            .map(|uid| {
+                                // Clamp accumulated value to u16 max
+                                uid_weights.get(uid).copied().unwrap_or(0).min(65535) as u16
+                            })
+                            .collect();
+
+                        // Max-upscale weights so largest = 65535
+                        // This matches Python's convert_weights_and_uids_for_emit behavior
+                        let max_val = *vals.iter().max().unwrap_or(&0) as f64;
+                        if max_val > 0.0 && max_val < 65535.0 {
+                            vals = vals
+                                .iter()
+                                .map(|v| ((*v as f64 / max_val) * 65535.0).round() as u16)
+                                .collect();
+                        }
+
+                        info!(
+                            "Mechanism {}: {} UIDs merged from all challenges (max-upscaled)",
+                            mech_id,
+                            uids.len()
+                        );
+                        debug!("  UIDs: {:?}, Weights: {:?}", uids, vals);
+                        weights.push((mech_id, uids, vals));
                     }
 
                     weights
