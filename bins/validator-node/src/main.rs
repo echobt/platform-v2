@@ -1114,31 +1114,52 @@ async fn handle_block_event(
                 };
 
                 // Submit each mechanism via Subtensor (handles CRv4 automatically)
+                // Retry up to 3 times on failure
                 for (mechanism_id, uids, weights) in weights_to_submit {
-                    match st
-                        .set_mechanism_weights(
-                            sig,
-                            netuid,
-                            mechanism_id,
-                            &uids,
-                            &weights,
-                            version_key,
-                            ExtrinsicWait::Finalized,
-                        )
-                        .await
-                    {
-                        Ok(resp) if resp.success => {
-                            info!(
-                                "Mechanism {} weights submitted: {:?}",
-                                mechanism_id, resp.tx_hash
-                            );
+                    let mut success = false;
+                    for attempt in 1..=3 {
+                        match st
+                            .set_mechanism_weights(
+                                sig,
+                                netuid,
+                                mechanism_id,
+                                &uids,
+                                &weights,
+                                version_key,
+                                ExtrinsicWait::Finalized,
+                            )
+                            .await
+                        {
+                            Ok(resp) if resp.success => {
+                                info!(
+                                    "Mechanism {} weights submitted: {:?}",
+                                    mechanism_id, resp.tx_hash
+                                );
+                                success = true;
+                                break;
+                            }
+                            Ok(resp) => {
+                                warn!(
+                                    "Mechanism {} issue (attempt {}): {}",
+                                    mechanism_id, attempt, resp.message
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Mechanism {} failed (attempt {}): {}",
+                                    mechanism_id, attempt, e
+                                );
+                            }
                         }
-                        Ok(resp) => {
-                            warn!("Mechanism {} issue: {}", mechanism_id, resp.message);
+                        if attempt < 3 {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
                         }
-                        Err(e) => {
-                            error!("Mechanism {} failed: {}", mechanism_id, e);
-                        }
+                    }
+                    if !success {
+                        error!(
+                            "Mechanism {} weights failed after 3 attempts - will retry next epoch",
+                            mechanism_id
+                        );
                     }
                 }
             } else {
