@@ -250,12 +250,31 @@ impl StoredEntry {
         })
     }
 
-    /// Decompress and deserialize value
+    /// Decompress and deserialize value with size limit
     pub fn decompress<T: DeserializeOwned>(&self) -> Result<T, StorageError> {
+        use bincode::Options;
+
         let raw = decompress_size_prepended(&self.compressed_value)
             .map_err(|e| StorageError::Decompression(e.to_string()))?;
 
-        bincode::deserialize(&raw).map_err(|e| StorageError::Serialization(e.to_string()))
+        // Verify decompressed size matches header to prevent decompression bombs
+        if raw.len() != self.header.raw_size as usize {
+            return Err(StorageError::Decompression(format!(
+                "Decompressed size mismatch: expected {}, got {}",
+                self.header.raw_size,
+                raw.len()
+            )));
+        }
+
+        // Enforce MAX_RAW_SIZE limit (already defined as 10 MB)
+        // Use options compatible with bincode::serialize (little-endian, variable int, trailing allowed)
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_little_endian()
+            .allow_trailing_bytes()
+            .with_limit(MAX_RAW_SIZE as u64)
+            .deserialize(&raw)
+            .map_err(|e| StorageError::Serialization(e.to_string()))
     }
 
     /// Decompress and return raw bytes (for validation)
@@ -298,9 +317,20 @@ impl StoredEntry {
         bincode::serialize(self).map_err(|e| StorageError::Serialization(e.to_string()))
     }
 
-    /// Deserialize from storage
+    /// Deserialize from storage with size limit
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, StorageError> {
-        bincode::deserialize(bytes).map_err(|e| StorageError::Serialization(e.to_string()))
+        use bincode::Options;
+        // MAX_COMPRESSED_SIZE (5 MB) + header overhead
+        const MAX_STORED_ENTRY_SIZE: u64 = 6 * 1024 * 1024;
+
+        // Use options compatible with bincode::serialize (little-endian, variable int, trailing allowed)
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_little_endian()
+            .allow_trailing_bytes()
+            .with_limit(MAX_STORED_ENTRY_SIZE)
+            .deserialize(bytes)
+            .map_err(|e| StorageError::Serialization(e.to_string()))
     }
 
     /// Build storage key

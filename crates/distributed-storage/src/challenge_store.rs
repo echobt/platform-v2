@@ -741,7 +741,7 @@ fn build_merkle_proof(leaves: &[[u8; 32]], leaf_index: usize, data: &[u8]) -> Me
     let mut index = leaf_index;
 
     while level.len() > 1 {
-        let sibling_index = if index % 2 == 0 {
+        let sibling_index = if index.is_multiple_of(2) {
             if index + 1 < level.len() {
                 index + 1
             } else {

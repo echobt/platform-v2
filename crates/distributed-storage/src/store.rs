@@ -66,7 +66,7 @@ impl StorageKey {
     /// Compute SHA256 hash of the key (for DHT routing)
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.to_bytes());
+        hasher.update(self.to_bytes());
         hasher.finalize().into()
     }
 

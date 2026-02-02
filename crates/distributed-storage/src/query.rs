@@ -3,9 +3,24 @@
 //! This module provides SQL-like query capabilities using sled's range iterators.
 //! It supports block-based filtering, pagination, and fluent query construction.
 
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 use crate::store::{StorageKey, StoredValue};
+
+/// Maximum size for deserializing query cursor data (1MB).
+/// This limit prevents DoS attacks from malformed data causing excessive memory allocation.
+/// Cursors are small structures, so 1MB is more than sufficient.
+const MAX_CURSOR_SIZE: u64 = 1024 * 1024;
+
+/// Create bincode options with size limit for safe deserialization.
+/// Uses fixint encoding and allows trailing bytes for compatibility with `bincode::serialize()`.
+fn bincode_options() -> impl Options {
+    bincode::options()
+        .with_limit(MAX_CURSOR_SIZE)
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+}
 
 /// Result of a query operation with pagination support
 #[derive(Clone, Debug)]
@@ -112,9 +127,10 @@ impl QueryCursor {
         bincode::serialize(self).unwrap_or_default()
     }
 
-    /// Decode cursor from bytes
+    /// Decode cursor from bytes with size limit protection.
+    /// Limits deserialization to MAX_CURSOR_SIZE bytes to prevent DoS via memory exhaustion.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        bincode::deserialize(bytes).ok()
+        bincode_options().deserialize(bytes).ok()
     }
 
     /// Encode cursor to base64 string
@@ -156,10 +172,10 @@ impl QueryFilter {
     /// Check if an entry matches this filter
     pub fn matches(&self, block_id: Option<u64>, created_at: i64, key: &[u8]) -> bool {
         match self {
-            QueryFilter::BlockBefore(max_block) => block_id.map_or(true, |b| b < *max_block),
-            QueryFilter::BlockAfter(min_block) => block_id.map_or(false, |b| b > *min_block),
+            QueryFilter::BlockBefore(max_block) => block_id.is_none_or(|b| b < *max_block),
+            QueryFilter::BlockAfter(min_block) => block_id.is_some_and(|b| b > *min_block),
             QueryFilter::BlockRange { start, end } => {
-                block_id.map_or(false, |b| b >= *start && b <= *end)
+                block_id.is_some_and(|b| b >= *start && b <= *end)
             }
             QueryFilter::CreatedBefore(timestamp) => created_at < *timestamp,
             QueryFilter::CreatedAfter(timestamp) => created_at > *timestamp,

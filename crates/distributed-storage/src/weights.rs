@@ -2,9 +2,23 @@
 //!
 //! Types for storing and managing weight calculations and validator votes.
 
+use bincode::Options;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+/// Maximum size for deserializing weight data (10MB).
+/// This limit prevents DoS attacks from malformed data causing excessive memory allocation.
+const MAX_DESERIALIZE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Create bincode options with size limit for safe deserialization.
+/// Uses fixint encoding and allows trailing bytes for compatibility with `bincode::serialize()`.
+fn bincode_options() -> impl Options {
+    bincode::options()
+        .with_limit(MAX_DESERIALIZE_SIZE)
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+}
 
 /// Stored weights for an epoch
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,9 +146,10 @@ impl StoredWeights {
         bincode::serialize(self)
     }
 
-    /// Deserialize from bincode
+    /// Deserialize from bincode with size limit protection.
+    /// Limits deserialization to MAX_DESERIALIZE_SIZE bytes to prevent DoS via memory exhaustion.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
-        bincode::deserialize(bytes)
+        bincode_options().deserialize(bytes)
     }
 }
 
@@ -193,8 +208,8 @@ impl ValidatorWeightVote {
     /// Compute hash of the vote (for deduplication)
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.signing_message());
-        hasher.update(&self.timestamp.timestamp_millis().to_le_bytes());
+        hasher.update(self.signing_message());
+        hasher.update(self.timestamp.timestamp_millis().to_le_bytes());
         hasher.finalize().into()
     }
 
@@ -347,7 +362,7 @@ impl WeightAggregator {
             weights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             let len = weights.len();
-            let median = if len % 2 == 0 {
+            let median = if len.is_multiple_of(2) {
                 (weights[len / 2 - 1] + weights[len / 2]) / 2.0
             } else {
                 weights[len / 2]
