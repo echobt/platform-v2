@@ -52,7 +52,8 @@ pub use messages::{
     ViewNumber, WeightVoteMessage,
 };
 pub use network::{
-    NetworkBehaviour, NetworkError, NetworkEvent, NetworkRunner, P2PNetwork, PeerMapping,
+    NetworkBehaviour, NetworkError, NetworkEvent, NetworkRunner, P2PCommand, P2PEvent,
+    P2PNetwork, PeerMapping,
 };
 pub use state::{
     build_merkle_proof, compute_merkle_root, verify_merkle_proof, ChainState, ChallengeConfig,
@@ -64,6 +65,10 @@ pub use validator::{
 
 /// Protocol version string
 pub const PROTOCOL_VERSION: &str = "1.0.0";
+
+/// Hardcoded SudoOwner hotkey (SS58 format)
+/// This is the only key allowed to perform sudo operations
+pub const SUDO_HOTKEY: &str = "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At";
 
 /// Default consensus topic
 pub const CONSENSUS_TOPIC: &str = "platform/consensus/1.0.0";
