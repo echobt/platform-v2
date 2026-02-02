@@ -38,6 +38,8 @@
 
 ## System Overview
 
+> **Note:** Platform now supports two operating modes: **Centralized Mode** (default, using platform-server) and **P2P Mode** (recommended, fully decentralized). See the [Decentralized P2P Mode](#decentralized-p2p-mode-recommended) section for the peer-to-peer architecture.
+
 Platform involves three main participants:
 
 - **Miners**: Submit code/models to challenges for evaluation
@@ -368,6 +370,54 @@ docker compose up -d
 
 The validator will auto-connect to platform-server at `chain.platform.network` and sync.
 
+## Decentralized P2P Mode (Recommended)
+
+Platform supports a fully decentralized architecture where validators communicate via P2P without requiring a central server.
+
+### Benefits
+- **No single point of failure** - No dependency on chain.platform.network
+- **Fully trustless** - Validators reach consensus via PBFT
+- **Bittensor-linked state** - State changes are linked to Subtensor block numbers
+- **DHT storage** - Submissions and evaluations stored across the network
+
+### Quick Start (P2P Mode)
+
+```bash
+git clone https://github.com/PlatformNetwork/platform.git
+cd platform
+cp .env.example .env
+# Edit .env: add your VALIDATOR_SECRET_KEY (BIP39 mnemonic)
+docker compose -f docker-compose.decentralized.yml up -d
+```
+
+### Architecture (P2P Mode)
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   VALIDATOR 1   │◄───►│   VALIDATOR 2   │◄───►│   VALIDATOR N   │
+│   (libp2p)      │     │   (libp2p)      │     │   (libp2p)      │
+└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                                 ▼
+                    ┌─────────────────────────┐
+                    │     BITTENSOR CHAIN     │
+                    │     (Weight Commits)    │
+                    │   State linked to blocks │
+                    └─────────────────────────┘
+```
+
+### P2P Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VALIDATOR_SECRET_KEY` | BIP39 mnemonic or hex key | - |
+| `SUBTENSOR_ENDPOINT` | Bittensor RPC endpoint | `wss://entrypoint-finney.opentensor.ai:443` |
+| `NETUID` | Subnet UID | `100` |
+| `P2P_LISTEN_ADDR` | libp2p listen address | `/ip4/0.0.0.0/tcp/9000` |
+| `BOOTSTRAP_PEERS` | Bootstrap peers (comma-separated) | - |
+
 ## Hardware Requirements
 
 | Resource    | Minimum    | Recommended |
@@ -413,7 +463,7 @@ Standard REST endpoints for submissions, evaluations, and challenges.
 | `SUBTENSOR_ENDPOINT`   | Bittensor RPC endpoint               | `wss://entrypoint-finney.opentensor.ai:443` | No           |
 | `NETUID`               | Subnet UID                           | `100`                                       | No           |
 | `RUST_LOG`             | Log level                            | `info`                                      | No           |
-| `PLATFORM_SERVER_URL`  | Platform server URL                  | `https://chain.platform.network`            | No           |
+| `PLATFORM_SERVER_URL`  | Platform server URL                  | `https://chain.platform.network`            | No (centralized mode only) |
 | `PLATFORM_PUBLIC_URL`  | Public URL for challenge containers  | -                                           | Yes          |
 | `DATABASE_URL`         | PostgreSQL connection (server only)  | -                                           | Yes (server) |
 | `OWNER_HOTKEY`         | Subnet owner hotkey                  | -                                           | Yes (server) |

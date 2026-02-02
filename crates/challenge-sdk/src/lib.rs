@@ -111,6 +111,7 @@ pub mod weights;
 pub use decentralized::run_decentralized;
 pub use p2p_client::{
     P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,
+    ValidatorEvaluationResult,
 };
 pub use platform_client::{
     run_as_client, ChallengeMessage, ConnectionState, PlatformClient, PlatformClientConfig,
@@ -145,6 +146,7 @@ pub mod prelude {
     pub use super::decentralized::run_decentralized;
     pub use super::p2p_client::{
         P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,
+        ValidatorEvaluationResult,
     };
 
     // Common utilities

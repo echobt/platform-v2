@@ -17,6 +17,8 @@ use platform_core::Keypair;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+// Default server for centralized mode (optional in P2P mode)
+// In decentralized mode, sudo operations are broadcast via P2P consensus
 const DEFAULT_SERVER: &str = "https://chain.platform.network";
 
 #[derive(Parser, Debug)]

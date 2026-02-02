@@ -1,4 +1,17 @@
-//! Validator Node - Centralized Architecture
+//! # DEPRECATED - Use validator-decentralized Instead
+//!
+//! This centralized validator is deprecated. For new deployments, use:
+//! ```
+//! validator-decentralized --data-dir /data --listen-addr /ip4/0.0.0.0/tcp/9000
+//! ```
+//!
+//! The decentralized validator operates in P2P mode without requiring
+//! chain.platform.network. It uses libp2p gossipsub for consensus and
+//! Kademlia DHT for peer discovery.
+//!
+//! ---
+//!
+//! # Validator Node - Centralized Architecture (Legacy)
 //!
 //! All communication via platform-server (chain.platform.network).
 //! No P2P networking. Weights submitted via Subtensor (handles CRv4 automatically).

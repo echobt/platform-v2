@@ -97,6 +97,44 @@ pub enum P2PChallengeMessage {
         /// Aggregated weights as (hotkey, weight) pairs
         weights: Vec<(String, f64)>,
     },
+    /// Store submission in distributed storage
+    StoreSubmission {
+        /// Challenge identifier
+        challenge_id: String,
+        /// Submission data
+        submission: PendingSubmission,
+    },
+    /// Request evaluation status for a submission
+    RequestEvaluationStatus {
+        /// Challenge identifier
+        challenge_id: String,
+        /// Submission hash
+        submission_hash: String,
+    },
+    /// Evaluation status response
+    EvaluationStatusResponse {
+        /// Challenge identifier
+        challenge_id: String,
+        /// Submission hash
+        submission_hash: String,
+        /// List of validator evaluations received
+        evaluations: Vec<ValidatorEvaluationResult>,
+        /// Whether consensus has been reached
+        consensus_reached: bool,
+        /// Final aggregated score (if consensus reached)
+        final_score: Option<f64>,
+    },
+}
+
+/// Result of a validator's evaluation
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ValidatorEvaluationResult {
+    /// Validator hotkey
+    pub validator_hotkey: String,
+    /// Evaluation score
+    pub score: f64,
+    /// Timestamp of evaluation
+    pub evaluated_at: i64,
 }
 
 /// A submission pending evaluation
@@ -366,6 +404,117 @@ impl P2PChallengeClient {
             }
             Err(_) => Err(ChallengeError::Timeout(
                 "Request weights timeout".to_string(),
+            )),
+        }
+    }
+
+    /// Store a submission in the distributed network
+    ///
+    /// # Arguments
+    ///
+    /// * `submission` - The submission to store in the P2P network
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the message was sent successfully, or an error
+    /// if the channel is closed or send failed.
+    pub async fn store_submission(
+        &self,
+        submission: PendingSubmission,
+    ) -> Result<(), ChallengeError> {
+        let msg = P2PChallengeMessage::StoreSubmission {
+            challenge_id: self.config.challenge_id.clone(),
+            submission: submission.clone(),
+        };
+
+        debug!(
+            challenge_id = %self.config.challenge_id,
+            submission_hash = %submission.submission_hash,
+            miner_hotkey = %submission.miner_hotkey,
+            "Storing submission in distributed network"
+        );
+
+        self.config
+            .message_tx
+            .send(msg)
+            .await
+            .map_err(|e| ChallengeError::Network(format!("Failed to store submission: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get evaluation status for a submission
+    ///
+    /// Requests the evaluation status for a submission from the P2P network.
+    /// Returns the list of validator evaluations received so far and the
+    /// final aggregated score if consensus has been reached.
+    ///
+    /// # Arguments
+    ///
+    /// * `submission_hash` - Hash of the submission to check status for
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (evaluations, final_score) where:
+    /// - `evaluations` is a list of validator evaluation results
+    /// - `final_score` is `Some(score)` if consensus was reached, `None` otherwise
+    pub async fn get_evaluation_status(
+        &self,
+        submission_hash: &str,
+    ) -> Result<(Vec<ValidatorEvaluationResult>, Option<f64>), ChallengeError> {
+        let msg = P2PChallengeMessage::RequestEvaluationStatus {
+            challenge_id: self.config.challenge_id.clone(),
+            submission_hash: submission_hash.to_string(),
+        };
+
+        debug!(
+            challenge_id = %self.config.challenge_id,
+            submission_hash = %submission_hash,
+            "Requesting evaluation status via P2P"
+        );
+
+        self.config
+            .message_tx
+            .send(msg)
+            .await
+            .map_err(|e| ChallengeError::Network(format!("Failed to request status: {}", e)))?;
+
+        // Wait for response with timeout
+        let mut rx = self.config.message_rx.write();
+        match tokio::time::timeout(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS), rx.recv())
+            .await
+        {
+            Ok(Some(P2PChallengeMessage::EvaluationStatusResponse {
+                evaluations,
+                final_score,
+                ..
+            })) => {
+                debug!(
+                    challenge_id = %self.config.challenge_id,
+                    submission_hash = %submission_hash,
+                    evaluation_count = %evaluations.len(),
+                    has_final_score = %final_score.is_some(),
+                    "Received evaluation status"
+                );
+                Ok((evaluations, final_score))
+            }
+            Ok(Some(other)) => {
+                warn!(
+                    challenge_id = %self.config.challenge_id,
+                    "Received unexpected message while waiting for evaluation status: {:?}",
+                    other
+                );
+                Ok((vec![], None))
+            }
+            Ok(None) => {
+                warn!(
+                    challenge_id = %self.config.challenge_id,
+                    "P2P channel closed while waiting for evaluation status"
+                );
+                Ok((vec![], None))
+            }
+            Err(_) => Err(ChallengeError::Timeout(
+                "Evaluation status timeout".to_string(),
             )),
         }
     }
@@ -644,12 +793,233 @@ mod tests {
                 epoch: 3,
                 weights: vec![],
             },
+            P2PChallengeMessage::StoreSubmission {
+                challenge_id: "c7".to_string(),
+                submission: PendingSubmission {
+                    submission_hash: "sh1".to_string(),
+                    miner_hotkey: "miner1".to_string(),
+                    source_code: "code".to_string(),
+                    metadata: serde_json::json!({}),
+                    submitted_at: 1704067200,
+                },
+            },
+            P2PChallengeMessage::RequestEvaluationStatus {
+                challenge_id: "c8".to_string(),
+                submission_hash: "sh2".to_string(),
+            },
+            P2PChallengeMessage::EvaluationStatusResponse {
+                challenge_id: "c9".to_string(),
+                submission_hash: "sh3".to_string(),
+                evaluations: vec![],
+                consensus_reached: false,
+                final_score: None,
+            },
         ];
 
         for msg in messages {
             let json = serde_json::to_string(&msg).expect("All message variants should serialize");
             let _: P2PChallengeMessage =
                 serde_json::from_str(&json).expect("All message variants should deserialize");
+        }
+    }
+
+    #[test]
+    fn test_validator_evaluation_result_serialization() {
+        let result = ValidatorEvaluationResult {
+            validator_hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".to_string(),
+            score: 0.87,
+            evaluated_at: 1704067200,
+        };
+
+        let json = serde_json::to_string(&result).expect("Serialization should work");
+        let deserialized: ValidatorEvaluationResult =
+            serde_json::from_str(&json).expect("Deserialization should work");
+
+        assert_eq!(
+            deserialized.validator_hotkey,
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        );
+        assert!((deserialized.score - 0.87).abs() < f64::EPSILON);
+        assert_eq!(deserialized.evaluated_at, 1704067200);
+    }
+
+    #[test]
+    fn test_store_submission_message_serialization() {
+        let submission = PendingSubmission {
+            submission_hash: "store-hash-123".to_string(),
+            miner_hotkey: "5GrwvaEF...".to_string(),
+            source_code: "fn main() { println!(\"hello\"); }".to_string(),
+            metadata: serde_json::json!({"language": "rust", "version": "1.0"}),
+            submitted_at: 1704067200,
+        };
+
+        let msg = P2PChallengeMessage::StoreSubmission {
+            challenge_id: "test-challenge".to_string(),
+            submission: submission.clone(),
+        };
+
+        let json = serde_json::to_string(&msg).expect("Serialization should work");
+        let deserialized: P2PChallengeMessage =
+            serde_json::from_str(&json).expect("Deserialization should work");
+
+        if let P2PChallengeMessage::StoreSubmission {
+            challenge_id,
+            submission: deser_submission,
+        } = deserialized
+        {
+            assert_eq!(challenge_id, "test-challenge");
+            assert_eq!(deser_submission.submission_hash, "store-hash-123");
+            assert_eq!(
+                deser_submission.source_code,
+                "fn main() { println!(\"hello\"); }"
+            );
+        } else {
+            panic!("Wrong message type after deserialization");
+        }
+    }
+
+    #[test]
+    fn test_evaluation_status_response_serialization() {
+        let evaluations = vec![
+            ValidatorEvaluationResult {
+                validator_hotkey: "validator1".to_string(),
+                score: 0.85,
+                evaluated_at: 1704067200,
+            },
+            ValidatorEvaluationResult {
+                validator_hotkey: "validator2".to_string(),
+                score: 0.90,
+                evaluated_at: 1704067300,
+            },
+        ];
+
+        let msg = P2PChallengeMessage::EvaluationStatusResponse {
+            challenge_id: "test-challenge".to_string(),
+            submission_hash: "test-hash".to_string(),
+            evaluations: evaluations.clone(),
+            consensus_reached: true,
+            final_score: Some(0.875),
+        };
+
+        let json = serde_json::to_string(&msg).expect("Serialization should work");
+        let deserialized: P2PChallengeMessage =
+            serde_json::from_str(&json).expect("Deserialization should work");
+
+        if let P2PChallengeMessage::EvaluationStatusResponse {
+            challenge_id,
+            submission_hash,
+            evaluations: deser_evals,
+            consensus_reached,
+            final_score,
+        } = deserialized
+        {
+            assert_eq!(challenge_id, "test-challenge");
+            assert_eq!(submission_hash, "test-hash");
+            assert_eq!(deser_evals.len(), 2);
+            assert!(consensus_reached);
+            assert!((final_score.expect("Should have final score") - 0.875).abs() < f64::EPSILON);
+        } else {
+            panic!("Wrong message type after deserialization");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_store_submission() {
+        let (config, mut rx) = create_test_config();
+        let client = P2PChallengeClient::new(config);
+
+        let submission = PendingSubmission {
+            submission_hash: "store-test-hash".to_string(),
+            miner_hotkey: "test-miner".to_string(),
+            source_code: "fn main() {}".to_string(),
+            metadata: serde_json::json!({"test": true}),
+            submitted_at: 1704067200,
+        };
+
+        let result = client.store_submission(submission.clone()).await;
+        assert!(result.is_ok());
+
+        // Verify message was sent
+        let msg = rx.recv().await.expect("Should receive message");
+        if let P2PChallengeMessage::StoreSubmission {
+            challenge_id,
+            submission: recv_submission,
+        } = msg
+        {
+            assert_eq!(challenge_id, "test-challenge");
+            assert_eq!(recv_submission.submission_hash, "store-test-hash");
+            assert_eq!(recv_submission.miner_hotkey, "test-miner");
+        } else {
+            panic!("Wrong message type");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_request_evaluation_status_sends_message() {
+        let (tx, mut rx) = mpsc::channel(100);
+        let (_, response_rx) = mpsc::channel(100);
+
+        let config = P2PChallengeConfig {
+            challenge_id: "test-challenge".to_string(),
+            validator_hotkey: "test-validator".to_string(),
+            message_tx: tx,
+            message_rx: Arc::new(RwLock::new(response_rx)),
+        };
+
+        let client = P2PChallengeClient::new(config);
+
+        let request_future = client.get_evaluation_status("test-submission-hash");
+
+        // Use select! to check that request was sent without waiting for timeout
+        tokio::select! {
+            _ = request_future => {
+                // If we get here, means we got a response or timeout
+            }
+            msg = rx.recv() => {
+                let msg = msg.expect("Should receive request message");
+                if let P2PChallengeMessage::RequestEvaluationStatus {
+                    challenge_id,
+                    submission_hash,
+                } = msg
+                {
+                    assert_eq!(challenge_id, "test-challenge");
+                    assert_eq!(submission_hash, "test-submission-hash");
+                } else {
+                    panic!("Wrong message type");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_evaluation_status_response_no_consensus() {
+        let msg = P2PChallengeMessage::EvaluationStatusResponse {
+            challenge_id: "challenge".to_string(),
+            submission_hash: "hash".to_string(),
+            evaluations: vec![ValidatorEvaluationResult {
+                validator_hotkey: "v1".to_string(),
+                score: 0.5,
+                evaluated_at: 1704067200,
+            }],
+            consensus_reached: false,
+            final_score: None,
+        };
+
+        let json = serde_json::to_string(&msg).expect("Should serialize");
+        let deser: P2PChallengeMessage = serde_json::from_str(&json).expect("Should deserialize");
+
+        if let P2PChallengeMessage::EvaluationStatusResponse {
+            consensus_reached,
+            final_score,
+            evaluations,
+            ..
+        } = deser
+        {
+            assert!(!consensus_reached);
+            assert!(final_score.is_none());
+            assert_eq!(evaluations.len(), 1);
+        } else {
+            panic!("Wrong type");
         }
     }
 }

@@ -545,6 +545,10 @@ async fn handle_block_event(
     match event {
         BlockSyncEvent::NewBlock { block_number, .. } => {
             debug!("Block {}", block_number);
+            // Link state to Bittensor block (block hash not available in event, use zeros)
+            state_manager.apply(|state| {
+                state.link_to_bittensor_block(block_number, [0u8; 32]);
+            });
         }
         BlockSyncEvent::EpochTransition {
             old_epoch,

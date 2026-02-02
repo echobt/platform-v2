@@ -127,6 +127,16 @@ impl PeerMapping {
             self.hotkey_to_peer.write().remove(&hotkey);
         }
     }
+
+    /// Get the number of mapped peers (peers that have been identified with a hotkey)
+    pub fn len(&self) -> usize {
+        self.peer_to_hotkey.read().len()
+    }
+
+    /// Check if there are no mapped peers
+    pub fn is_empty(&self) -> bool {
+        self.peer_to_hotkey.read().is_empty()
+    }
 }
 
 impl Default for PeerMapping {
@@ -218,6 +228,22 @@ impl P2PNetwork {
     /// Get peer mapping
     pub fn peer_mapping(&self) -> Arc<PeerMapping> {
         self.peer_mapping.clone()
+    }
+
+    /// Get the count of connected peers that have been identified with a hotkey
+    ///
+    /// This returns the number of peers in the peer mapping, which includes
+    /// peers that have sent at least one verified message.
+    pub fn connected_peer_count(&self) -> usize {
+        self.peer_mapping.len()
+    }
+
+    /// Check if we have the minimum required peers for consensus
+    ///
+    /// This is useful for determining if the network has enough participants
+    /// to achieve consensus on proposals.
+    pub fn has_min_peers(&self, min_required: usize) -> bool {
+        self.connected_peer_count() >= min_required
     }
 
     /// Create gossipsub behaviour

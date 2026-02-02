@@ -126,6 +126,10 @@ pub struct ChainState {
     pub netuid: u16,
     /// Last update timestamp
     pub last_updated: i64,
+    /// Linked Bittensor/Subtensor block number
+    pub bittensor_block: u64,
+    /// Hash of the linked Bittensor/Subtensor block
+    pub bittensor_block_hash: [u8; 32],
 }
 
 impl Default for ChainState {
@@ -143,6 +147,8 @@ impl Default for ChainState {
             sudo_key: Hotkey(platform_core::SUDO_KEY_BYTES),
             netuid: 100,
             last_updated: chrono::Utc::now().timestamp_millis(),
+            bittensor_block: 0,
+            bittensor_block_hash: [0u8; 32],
         }
     }
 }
@@ -201,6 +207,21 @@ impl ChainState {
     pub fn increment_sequence(&mut self) {
         self.sequence += 1;
         self.update_hash();
+    }
+
+    /// Link state to a Bittensor block
+    ///
+    /// Updates the linked Bittensor block number and hash, and increments
+    /// the sequence number to track this state change.
+    pub fn link_to_bittensor_block(&mut self, block_number: u64, block_hash: [u8; 32]) {
+        self.bittensor_block = block_number;
+        self.bittensor_block_hash = block_hash;
+        self.increment_sequence();
+    }
+
+    /// Get linked Bittensor block number
+    pub fn linked_block(&self) -> u64 {
+        self.bittensor_block
     }
 
     /// Check if a hotkey is the sudo key
