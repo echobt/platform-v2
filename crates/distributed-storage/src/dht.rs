@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{debug, trace, warn};
@@ -47,6 +48,42 @@ impl DhtNode {
             is_online: true,
         }
     }
+}
+
+/// Calculate XOR distance between two 32-byte arrays
+///
+/// In Kademlia, the distance between two identifiers is the XOR of those identifiers,
+/// interpreted as an unsigned integer. This is a valid metric:
+/// - d(x, x) = 0
+/// - d(x, y) = d(y, x)
+/// - d(x, z) <= d(x, y) + d(y, z)
+fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut result = [0u8; 32];
+    for i in 0..32 {
+        result[i] = a[i] ^ b[i];
+    }
+    result
+}
+
+/// Compare two XOR distances using lexicographic ordering
+///
+/// Since XOR distances are represented as 256-bit numbers (32 bytes),
+/// lexicographic comparison provides correct numerical ordering.
+fn distance_cmp(d1: &[u8; 32], d2: &[u8; 32]) -> std::cmp::Ordering {
+    d1.cmp(d2)
+}
+
+/// Hash a node ID to a 32-byte array using SHA256
+///
+/// This converts the string node ID to a fixed-size identifier
+/// suitable for XOR distance calculations.
+fn hash_node_id(node_id: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(node_id.as_bytes());
+    let result = hasher.finalize();
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&result);
+    hash
 }
 
 /// DHT routing table
@@ -96,11 +133,36 @@ impl RoutingTable {
         self.nodes.len()
     }
 
-    /// Find the k closest nodes to a key
-    pub fn find_closest(&self, _key_hash: &[u8; 32], k: usize) -> Vec<&DhtNode> {
-        // In a real implementation, this would use XOR distance metric
-        // For now, just return up to k nodes
-        self.nodes.values().take(k).collect()
+    /// Find the k closest nodes to a key using XOR distance metric
+    ///
+    /// This implements the core Kademlia algorithm for finding nodes closest
+    /// to a given key. Nodes are sorted by their XOR distance to the key hash,
+    /// and the k closest are returned.
+    pub fn find_closest(&self, key_hash: &[u8; 32], k: usize) -> Vec<&DhtNode> {
+        if self.nodes.is_empty() {
+            return Vec::new();
+        }
+
+        // Calculate distances for all nodes and sort
+        let mut nodes_with_distance: Vec<(&DhtNode, [u8; 32])> = self
+            .nodes
+            .values()
+            .map(|node| {
+                let node_hash = hash_node_id(&node.id);
+                let distance = xor_distance(&node_hash, key_hash);
+                (node, distance)
+            })
+            .collect();
+
+        // Sort by XOR distance (ascending - closest first)
+        nodes_with_distance.sort_by(|(_, d1), (_, d2)| distance_cmp(d1, d2));
+
+        // Return the k closest nodes
+        nodes_with_distance
+            .into_iter()
+            .take(k)
+            .map(|(node, _)| node)
+            .collect()
     }
 
     /// Mark a node as offline
@@ -327,7 +389,7 @@ impl<H: DhtNetworkHandler> DhtStorage<H> {
             match self.network.put_value(node, key, value).await {
                 Ok(()) => {
                     success_count += 1;
-                    self.local.mark_replicated(key, &node.id)?;
+                    self.local.mark_replicated(key, &node.id).await?;
                 }
                 Err(e) => {
                     warn!("Failed to put value to node {}: {}", node.id, e);
@@ -631,5 +693,129 @@ mod tests {
 
         let stats = dht.stats().await.expect("stats failed");
         assert_eq!(stats.remote_peers, 2);
+    }
+
+    #[test]
+    fn test_xor_distance() {
+        // Test basic XOR properties
+        let a = [0u8; 32];
+        let b = [0xffu8; 32];
+
+        // Distance to self is zero
+        let d_aa = xor_distance(&a, &a);
+        assert_eq!(d_aa, [0u8; 32]);
+
+        // Distance is symmetric
+        let d_ab = xor_distance(&a, &b);
+        let d_ba = xor_distance(&b, &a);
+        assert_eq!(d_ab, d_ba);
+
+        // XOR of zeros and all-ones gives all-ones
+        assert_eq!(d_ab, [0xffu8; 32]);
+
+        // Test with specific values
+        let mut c = [0u8; 32];
+        c[0] = 0x10;
+        let d_ac = xor_distance(&a, &c);
+        let mut expected = [0u8; 32];
+        expected[0] = 0x10;
+        assert_eq!(d_ac, expected);
+    }
+
+    #[test]
+    fn test_distance_cmp() {
+        let zero = [0u8; 32];
+        let mut small = [0u8; 32];
+        small[31] = 1; // Small distance (only LSB set)
+        let mut large = [0u8; 32];
+        large[0] = 1; // Large distance (MSB set)
+
+        // Zero is smallest
+        assert_eq!(distance_cmp(&zero, &small), std::cmp::Ordering::Less);
+        assert_eq!(distance_cmp(&zero, &large), std::cmp::Ordering::Less);
+
+        // Small < Large (since MSB comparison dominates)
+        assert_eq!(distance_cmp(&small, &large), std::cmp::Ordering::Less);
+
+        // Equal distances
+        assert_eq!(distance_cmp(&small, &small), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_hash_node_id() {
+        // Hash should be deterministic
+        let h1 = hash_node_id("test-node");
+        let h2 = hash_node_id("test-node");
+        assert_eq!(h1, h2);
+
+        // Different IDs should produce different hashes
+        let h3 = hash_node_id("other-node");
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_find_closest_with_xor_distance() {
+        let mut rt = RoutingTable::new();
+
+        // Add multiple nodes
+        rt.add_node(DhtNode::new("node-a", "127.0.0.1:8000"));
+        rt.add_node(DhtNode::new("node-b", "127.0.0.1:8001"));
+        rt.add_node(DhtNode::new("node-c", "127.0.0.1:8002"));
+        rt.add_node(DhtNode::new("node-d", "127.0.0.1:8003"));
+        rt.add_node(DhtNode::new("node-e", "127.0.0.1:8004"));
+
+        // Create a key hash (using hash of "test-key")
+        let key_hash = hash_node_id("test-key");
+
+        // Find closest 3 nodes
+        let closest = rt.find_closest(&key_hash, 3);
+        assert_eq!(closest.len(), 3);
+
+        // Verify that returned nodes are actually the closest
+        // by checking that all non-returned nodes are at least as far
+        let closest_ids: HashSet<String> = closest.iter().map(|n| n.id.clone()).collect();
+
+        // Calculate distances for all returned nodes
+        let returned_distances: Vec<[u8; 32]> = closest
+            .iter()
+            .map(|n| xor_distance(&hash_node_id(&n.id), &key_hash))
+            .collect();
+
+        // Get max distance among returned nodes
+        let max_returned = returned_distances.iter().max().expect("should have max");
+
+        // Check that non-returned nodes are not closer than any returned node
+        for node in rt.all_nodes() {
+            if !closest_ids.contains(&node.id) {
+                let dist = xor_distance(&hash_node_id(&node.id), &key_hash);
+                assert!(
+                    distance_cmp(&dist, max_returned) != std::cmp::Ordering::Less,
+                    "Node {} should not be closer than returned nodes",
+                    node.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_closest_fewer_than_k_nodes() {
+        let mut rt = RoutingTable::new();
+        rt.add_node(DhtNode::new("node1", "127.0.0.1:8000"));
+        rt.add_node(DhtNode::new("node2", "127.0.0.1:8001"));
+
+        let key_hash = [0u8; 32];
+        let closest = rt.find_closest(&key_hash, 5);
+
+        // Should return all available nodes when k > node count
+        assert_eq!(closest.len(), 2);
+    }
+
+    #[test]
+    fn test_find_closest_empty_table() {
+        let rt = RoutingTable::new();
+        let key_hash = [0u8; 32];
+        let closest = rt.find_closest(&key_hash, 5);
+
+        assert!(closest.is_empty());
     }
 }
