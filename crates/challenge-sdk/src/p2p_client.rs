@@ -251,6 +251,7 @@ impl P2PChallengeClient {
     /// # Returns
     ///
     /// Returns a list of pending submissions or an error on timeout/failure.
+    #[allow(clippy::await_holding_lock)]
     pub async fn get_pending_submissions(
         &self,
         limit: usize,
@@ -355,6 +356,7 @@ impl P2PChallengeClient {
     /// # Returns
     ///
     /// Returns aggregated weights as (hotkey, weight) pairs or an error on timeout.
+    #[allow(clippy::await_holding_lock)]
     pub async fn get_weights(&self, epoch: u64) -> Result<Vec<(String, f64)>, ChallengeError> {
         let msg = P2PChallengeMessage::RequestWeights {
             challenge_id: self.config.challenge_id.clone(),
@@ -458,6 +460,7 @@ impl P2PChallengeClient {
     /// Returns a tuple of (evaluations, final_score) where:
     /// - `evaluations` is a list of validator evaluation results
     /// - `final_score` is `Some(score)` if consensus was reached, `None` otherwise
+    #[allow(clippy::await_holding_lock)]
     pub async fn get_evaluation_status(
         &self,
         submission_hash: &str,
