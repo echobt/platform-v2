@@ -15,6 +15,7 @@ members = [
     "crates/p2p-consensus",
     "bins/platform",
     "bins/validator-node",
+    "bins/validator-decentralized",
     "bins/csudo",
     "bins/utils",
     "tests",

@@ -9066,6 +9066,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "validator-decentralized"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bittensor-rs",
+ "challenge-orchestrator",
+ "chrono",
+ "clap",
+ "futures",
+ "hex",
+ "libp2p",
+ "parking_lot 0.12.5",
+ "platform-bittensor",
+ "platform-challenge-sdk",
+ "platform-core",
+ "platform-distributed-storage",
+ "platform-p2p-consensus",
+ "platform-storage",
+ "secure-container-runtime",
+ "serde",
+ "serde_json",
+ "sp-core 38.1.0",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+ "uuid",
+]
+
+[[package]]
 name = "validator-node"
 version = "0.1.0"
 dependencies = [
