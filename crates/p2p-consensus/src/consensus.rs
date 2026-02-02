@@ -10,7 +10,7 @@ use crate::messages::{
 use crate::state::StateManager;
 use crate::validator::{LeaderElection, ValidatorSet};
 use parking_lot::RwLock;
-use platform_core::{Hotkey, Keypair};
+use platform_core::{Hotkey, Keypair, SignedMessage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -133,8 +133,7 @@ pub struct ConsensusEngine {
     validator_set: Arc<ValidatorSet>,
     /// Leader election
     leader_election: LeaderElection,
-    /// State manager (for applying decisions)
-    #[allow(dead_code)]
+    /// State manager (for applying decisions and sudo checks)
     state_manager: Arc<StateManager>,
     /// Current view number
     current_view: RwLock<ViewNumber>,
@@ -149,7 +148,6 @@ pub struct ConsensusEngine {
     /// Round timeout in milliseconds
     round_timeout_ms: i64,
     /// View change timeout in milliseconds (for extended view change operations)
-    #[allow(dead_code)]
     view_change_timeout_ms: i64,
 }
 
@@ -212,6 +210,16 @@ impl ConsensusEngine {
         
         if !self.leader_election.am_i_leader(view) {
             return Err(ConsensusError::NotLeader(view));
+        }
+
+        // Verify sudo authorization for ConfigUpdate proposals
+        if change_type == StateChangeType::ConfigUpdate {
+            let is_sudo = self.state_manager.read(|s| s.is_sudo(&self.keypair.hotkey()));
+            if !is_sudo {
+                return Err(ConsensusError::InvalidProposal(
+                    "ConfigUpdate requires sudo authorization".to_string()
+                ));
+            }
         }
 
         let sequence = *self.next_sequence.read();
@@ -308,6 +316,46 @@ impl ConsensusEngine {
 
         if computed_hash != proposal.proposal.data_hash {
             return Err(ConsensusError::InvalidProposal("Data hash mismatch".to_string()));
+        }
+
+        // Verify cryptographic signature on the proposal
+        #[derive(Serialize)]
+        struct ProposalSigningData {
+            view: ViewNumber,
+            sequence: SequenceNumber,
+            data_hash: [u8; 32],
+        }
+
+        let signing_data = ProposalSigningData {
+            view: proposal.view,
+            sequence: proposal.sequence,
+            data_hash: proposal.proposal.data_hash,
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+        let signed_msg = SignedMessage {
+            message: signing_bytes,
+            signature: proposal.signature.clone(),
+            signer: proposal.proposer.clone(),
+        };
+
+        let is_valid_sig = signed_msg.verify()
+            .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+        
+        if !is_valid_sig {
+            return Err(ConsensusError::InvalidSignature(proposal.proposer.to_hex()));
+        }
+
+        // Verify sudo authorization for ConfigUpdate proposals
+        if proposal.proposal.change_type == StateChangeType::ConfigUpdate {
+            let is_sudo = self.state_manager.read(|s| s.is_sudo(&proposal.proposer));
+            if !is_sudo {
+                return Err(ConsensusError::InvalidProposal(
+                    "ConfigUpdate requires sudo authorization".to_string()
+                ));
+            }
         }
 
         // Start round
@@ -447,6 +495,31 @@ impl ConsensusEngine {
             return Err(ConsensusError::InvalidProposal("Proposal hash mismatch".to_string()));
         }
 
+        // Verify cryptographic signature on the prepare message
+        #[derive(Serialize)]
+        struct PrepareSigningData {
+            view: ViewNumber,
+            sequence: SequenceNumber,
+            proposal_hash: [u8; 32],
+        }
+
+        let signing_data = PrepareSigningData {
+            view: prepare.view,
+            sequence: prepare.sequence,
+            proposal_hash: prepare.proposal_hash,
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+        let is_valid_sig = self.validator_set
+            .verify_signature(&prepare.validator, &signing_bytes, &prepare.signature)
+            .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+        if !is_valid_sig {
+            return Err(ConsensusError::InvalidSignature(prepare.validator.to_hex()));
+        }
+
         // Add prepare
         round.prepares.insert(prepare.validator.clone(), prepare);
 
@@ -545,6 +618,31 @@ impl ConsensusEngine {
         // Validate proposal hash
         if commit.proposal_hash != round.proposal_hash {
             return Err(ConsensusError::InvalidProposal("Proposal hash mismatch".to_string()));
+        }
+
+        // Verify cryptographic signature on the commit message
+        #[derive(Serialize)]
+        struct CommitSigningData {
+            view: ViewNumber,
+            sequence: SequenceNumber,
+            proposal_hash: [u8; 32],
+        }
+
+        let signing_data = CommitSigningData {
+            view: commit.view,
+            sequence: commit.sequence,
+            proposal_hash: commit.proposal_hash,
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+        let is_valid_sig = self.validator_set
+            .verify_signature(&commit.validator, &signing_bytes, &commit.signature)
+            .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+        if !is_valid_sig {
+            return Err(ConsensusError::InvalidSignature(commit.validator.to_hex()));
         }
 
         // Add commit
@@ -666,6 +764,29 @@ impl ConsensusEngine {
         &self,
         view_change: ViewChangeMessage,
     ) -> Result<Option<NewViewMessage>, ConsensusError> {
+        // Verify cryptographic signature on the view change message
+        #[derive(Serialize)]
+        struct ViewChangeSigningData {
+            new_view: ViewNumber,
+            last_prepared_sequence: Option<SequenceNumber>,
+        }
+
+        let signing_data = ViewChangeSigningData {
+            new_view: view_change.new_view,
+            last_prepared_sequence: view_change.last_prepared_sequence,
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+        let is_valid_sig = self.validator_set
+            .verify_signature(&view_change.validator, &signing_bytes, &view_change.signature)
+            .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+        if !is_valid_sig {
+            return Err(ConsensusError::InvalidSignature(view_change.validator.to_hex()));
+        }
+
         let mut state_guard = self.view_change_state.write();
         
         let state = state_guard.get_or_insert_with(|| ViewChangeState {
@@ -775,6 +896,42 @@ impl ConsensusEngine {
                 );
                 return true;
             }
+        }
+
+        false
+    }
+
+    /// Check if view change state has timed out
+    pub fn check_view_change_timeout(&self) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+
+        if let Some(view_change_state) = self.view_change_state.read().as_ref() {
+            if now - view_change_state.started_at > self.view_change_timeout_ms {
+                warn!(
+                    new_view = view_change_state.new_view,
+                    "View change operation timed out"
+                );
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Determine if we should initiate a view change based on timeouts
+    ///
+    /// Returns true if:
+    /// - The current consensus round has timed out, or
+    /// - There is an ongoing view change that has timed out
+    pub fn should_initiate_view_change(&self) -> bool {
+        // Check if current round has timed out
+        if self.check_timeout() {
+            return true;
+        }
+
+        // Check if there's a stalled view change operation
+        if self.check_view_change_timeout() {
+            return true;
         }
 
         false

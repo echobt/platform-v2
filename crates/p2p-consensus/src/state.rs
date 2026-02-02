@@ -5,12 +5,12 @@
 
 use crate::messages::{MerkleNode, MerkleProof, SequenceNumber};
 use parking_lot::RwLock;
-use platform_core::{hash_data, ChallengeId, Hotkey};
+use platform_core::{hash_data, ChallengeId, Hotkey, SignedMessage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Errors related to state operations
 #[derive(Error, Debug)]
@@ -25,6 +25,8 @@ pub enum StateError {
     Serialization(String),
     #[error("Challenge not found: {0}")]
     ChallengeNotFound(String),
+    #[error("Invalid signature: {0}")]
+    InvalidSignature(String),
 }
 
 /// Evaluation record for a submission
@@ -261,12 +263,44 @@ impl ChainState {
     }
 
     /// Add validator evaluation to existing record
+    ///
+    /// Verifies the provided signature before accepting the evaluation.
+    /// The signing data is (submission_id, score) serialized via bincode.
     pub fn add_validator_evaluation(
         &mut self,
         submission_id: &str,
         validator: Hotkey,
         evaluation: ValidatorEvaluation,
+        signature: &[u8],
     ) -> Result<(), StateError> {
+        // Verify signature over (submission_id, score)
+        #[derive(Serialize)]
+        struct EvaluationSigningData<'a> {
+            submission_id: &'a str,
+            score: f64,
+        }
+
+        let signing_data = EvaluationSigningData {
+            submission_id,
+            score: evaluation.score,
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| StateError::Serialization(e.to_string()))?;
+
+        let signed_msg = SignedMessage {
+            message: signing_bytes,
+            signature: signature.to_vec(),
+            signer: validator.clone(),
+        };
+
+        let is_valid = signed_msg.verify()
+            .map_err(|e| StateError::InvalidSignature(e.to_string()))?;
+
+        if !is_valid {
+            return Err(StateError::InvalidSignature(validator.to_hex()));
+        }
+
         if let Some(record) = self.pending_evaluations.get_mut(submission_id) {
             record.evaluations.insert(validator, evaluation);
             self.update_hash();
@@ -277,19 +311,37 @@ impl ChainState {
     }
 
     /// Finalize an evaluation (compute aggregated score)
+    ///
+    /// Uses verified stakes from the validators map when available,
+    /// falling back to self-reported stake only if validator not found.
     pub fn finalize_evaluation(&mut self, submission_id: &str) -> Result<f64, StateError> {
         if let Some(record) = self.pending_evaluations.get_mut(submission_id) {
-            // Stake-weighted average
-            let total_stake: u64 = record.evaluations.values().map(|e| e.stake).sum();
+            // Stake-weighted average using verified stakes where available
+            let mut total_stake: u64 = 0;
+            let mut weighted_sum: f64 = 0.0;
+
+            for (validator_hotkey, eval) in &record.evaluations {
+                // Prefer verified stake from validators map over self-reported stake
+                let stake = self.validators
+                    .get(validator_hotkey)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        // Fallback to self-reported stake only if validator not in map
+                        warn!(
+                            validator = %validator_hotkey.to_hex(),
+                            self_reported_stake = eval.stake,
+                            "Using self-reported stake for unknown validator"
+                        );
+                        eval.stake
+                    });
+
+                total_stake += stake;
+                weighted_sum += eval.score * (stake as f64);
+            }
+
             if total_stake == 0 {
                 return Ok(0.0);
             }
-
-            let weighted_sum: f64 = record
-                .evaluations
-                .values()
-                .map(|e| e.score * (e.stake as f64))
-                .sum();
 
             let aggregated = weighted_sum / (total_stake as f64);
             record.aggregated_score = Some(aggregated);
@@ -310,7 +362,9 @@ impl ChainState {
         }
     }
 
-    /// Add weight vote from validator
+    /// Add weight vote from validator (legacy method without signature verification)
+    ///
+    /// Prefer using `add_weight_vote_verified` which includes signature verification.
     pub fn add_weight_vote(&mut self, validator: Hotkey, weights: Vec<(u16, u16)>, epoch: u64) {
         let votes = self.weight_votes.get_or_insert_with(|| WeightVotes {
             epoch,
@@ -323,6 +377,70 @@ impl ChainState {
         if votes.epoch == epoch && !votes.finalized {
             votes.votes.insert(validator, weights);
             self.update_hash();
+        }
+    }
+
+    /// Add weight vote from validator with signature verification
+    ///
+    /// Verifies the provided signature before accepting the weight vote.
+    /// The signing data is (epoch, netuid, weights) serialized via bincode.
+    pub fn add_weight_vote_verified(
+        &mut self,
+        validator: Hotkey,
+        weights: Vec<(u16, u16)>,
+        epoch: u64,
+        signature: &[u8],
+    ) -> Result<(), StateError> {
+        // Verify signature over (epoch, netuid, weights)
+        #[derive(Serialize)]
+        struct WeightVoteSigningData {
+            epoch: u64,
+            netuid: u16,
+            weights: Vec<(u16, u16)>,
+        }
+
+        let signing_data = WeightVoteSigningData {
+            epoch,
+            netuid: self.netuid,
+            weights: weights.clone(),
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| StateError::Serialization(e.to_string()))?;
+
+        let signed_msg = SignedMessage {
+            message: signing_bytes,
+            signature: signature.to_vec(),
+            signer: validator.clone(),
+        };
+
+        let is_valid = signed_msg.verify()
+            .map_err(|e| StateError::InvalidSignature(e.to_string()))?;
+
+        if !is_valid {
+            return Err(StateError::InvalidSignature(validator.to_hex()));
+        }
+
+        let votes = self.weight_votes.get_or_insert_with(|| WeightVotes {
+            epoch,
+            netuid: self.netuid,
+            votes: HashMap::new(),
+            finalized: false,
+            final_weights: None,
+        });
+
+        if votes.epoch == epoch && !votes.finalized {
+            votes.votes.insert(validator, weights);
+            self.update_hash();
+            Ok(())
+        } else {
+            warn!(
+                epoch,
+                votes_epoch = votes.epoch,
+                finalized = votes.finalized,
+                "Weight vote rejected: epoch mismatch or already finalized"
+            );
+            Ok(()) // Not an error, just a stale vote
         }
     }
 
@@ -389,6 +507,40 @@ impl ChainState {
         self.weight_votes = None;
         self.increment_sequence();
         info!(epoch = self.epoch, "Transitioned to new epoch");
+    }
+
+    /// Get the current block height (sequence number)
+    ///
+    /// In this P2P consensus system, the sequence number serves as the
+    /// logical block height, incrementing with each state change.
+    pub fn block_height(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Get the current state hash as a 32-byte array
+    pub fn get_state_hash(&self) -> [u8; 32] {
+        self.state_hash
+    }
+
+    /// Get aggregated weights for a specific epoch
+    ///
+    /// Returns a vector of (hotkey_string, weight_as_f64) pairs, where weight
+    /// is normalized to a 0.0-1.0 range. Returns empty vector if no weights
+    /// exist for the given epoch.
+    pub fn get_aggregated_weights(&self, epoch: u64) -> Vec<(String, f64)> {
+        self.historical_weights
+            .get(&epoch)
+            .map(|weights| {
+                weights
+                    .iter()
+                    .map(|(uid, weight)| {
+                        // Convert u16 UID to string and normalize weight
+                        let normalized_weight = (*weight as f64) / (u16::MAX as f64);
+                        (uid.to_string(), normalized_weight)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -637,6 +789,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_flow() {
+        use platform_core::Keypair;
+        
         let mut state = ChainState::new(100);
 
         // Add evaluation record
@@ -653,18 +807,32 @@ mod tests {
         };
         state.add_evaluation(record);
 
-        // Add validator evaluation
-        let validator = Hotkey([2u8; 32]);
+        // Create a keypair for the validator
+        let validator_keypair = Keypair::generate();
+        let validator = validator_keypair.hotkey();
         state.validators.insert(validator.clone(), 1000);
+
+        // Create signing data for the evaluation
+        #[derive(serde::Serialize)]
+        struct EvaluationSigningData<'a> {
+            submission_id: &'a str,
+            score: f64,
+        }
+        let signing_data = EvaluationSigningData {
+            submission_id: "sub1",
+            score: 0.85,
+        };
+        let signing_bytes = bincode::serialize(&signing_data).unwrap();
+        let signature = validator_keypair.sign_bytes(&signing_bytes).unwrap();
 
         let eval = ValidatorEvaluation {
             score: 0.85,
             stake: 1000,
             timestamp: chrono::Utc::now().timestamp_millis(),
-            signature: vec![],
+            signature: signature.clone(),
         };
         state
-            .add_validator_evaluation("sub1", validator, eval)
+            .add_validator_evaluation("sub1", validator, eval, &signature)
             .unwrap();
 
         // Finalize

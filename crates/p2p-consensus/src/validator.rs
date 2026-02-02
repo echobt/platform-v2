@@ -97,6 +97,11 @@ pub struct ValidatorSet {
     local_keypair: Keypair,
     /// Stale threshold in milliseconds
     stale_threshold_ms: i64,
+    /// Verified stakes from on-chain data (set by caller who queries chain)
+    /// Key: validator hotkey, Value: verified stake amount in RAO
+    /// The caller is responsible for periodically querying on-chain data
+    /// (e.g., via Bittensor metagraph) and updating these values.
+    verified_stakes: RwLock<HashMap<Hotkey, u64>>,
 }
 
 impl ValidatorSet {
@@ -107,7 +112,29 @@ impl ValidatorSet {
             min_stake,
             local_keypair,
             stale_threshold_ms: 90_000, // 90 seconds (3x heartbeat interval)
+            verified_stakes: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Set verified stake for a validator from on-chain data
+    ///
+    /// This should be called by the caller (e.g., validator node) after
+    /// querying on-chain data (Bittensor metagraph) to establish trusted
+    /// stake values. Self-reported stakes from heartbeats are only accepted
+    /// if they match the verified stake or if no verified stake exists yet.
+    pub fn set_verified_stake(&self, hotkey: &Hotkey, stake: u64) {
+        self.verified_stakes.write().insert(hotkey.clone(), stake);
+        debug!(hotkey = %hotkey.to_hex(), stake, "Set verified stake from on-chain data");
+    }
+
+    /// Get verified stake for a validator
+    pub fn get_verified_stake(&self, hotkey: &Hotkey) -> Option<u64> {
+        self.verified_stakes.read().get(hotkey).copied()
+    }
+
+    /// Clear all verified stakes (useful when re-syncing from chain)
+    pub fn clear_verified_stakes(&self) {
+        self.verified_stakes.write().clear();
     }
 
     /// Get our local hotkey
@@ -202,22 +229,47 @@ impl ValidatorSet {
     }
 
     /// Update validator from heartbeat
+    ///
+    /// Self-reported stake is only accepted if it matches the verified stake
+    /// (set via `set_verified_stake`) or if no verified stake exists yet.
+    /// This prevents validators from falsely inflating their stake in heartbeats.
     pub fn update_from_heartbeat(
         &self,
         hotkey: &Hotkey,
         state_hash: [u8; 32],
         sequence: SequenceNumber,
-        stake: u64,
+        reported_stake: u64,
     ) -> Result<(), ValidatorError> {
+        // Determine the stake to use: prefer verified stake over self-reported
+        let stake_to_use = {
+            let verified = self.verified_stakes.read();
+            if let Some(&verified_stake) = verified.get(hotkey) {
+                // Only accept self-reported stake if it matches verified stake
+                if reported_stake != verified_stake {
+                    warn!(
+                        hotkey = %hotkey.to_hex(),
+                        reported = reported_stake,
+                        verified = verified_stake,
+                        "Heartbeat stake mismatch, using verified stake"
+                    );
+                }
+                verified_stake
+            } else {
+                // No verified stake yet, accept self-reported for now
+                // Caller should eventually verify this against on-chain data
+                reported_stake
+            }
+        };
+
         let mut validators = self.validators.write();
         if let Some(validator) = validators.get_mut(hotkey) {
-            validator.update_from_heartbeat(state_hash, sequence, stake);
+            validator.update_from_heartbeat(state_hash, sequence, stake_to_use);
             Ok(())
         } else {
             // Auto-register if stake meets minimum
-            if stake >= self.min_stake {
-                let mut record = ValidatorRecord::new(hotkey.clone(), stake);
-                record.update_from_heartbeat(state_hash, sequence, stake);
+            if stake_to_use >= self.min_stake {
+                let mut record = ValidatorRecord::new(hotkey.clone(), stake_to_use);
+                record.update_from_heartbeat(state_hash, sequence, stake_to_use);
                 drop(validators);
                 return self.register_validator(record);
             }

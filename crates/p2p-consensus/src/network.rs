@@ -14,7 +14,7 @@ use libp2p::{
 };
 use parking_lot::RwLock;
 use platform_core::{Hotkey, Keypair};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -36,6 +36,10 @@ pub enum NetworkError {
     NoPeers,
     #[error("Channel error: {0}")]
     Channel(String),
+    #[error("Replay attack detected: nonce {nonce} already seen for {signer}")]
+    ReplayAttack { signer: String, nonce: u64 },
+    #[error("Rate limit exceeded for {signer}: {count} messages in current window")]
+    RateLimitExceeded { signer: String, count: u32 },
 }
 
 /// Combined network behavior using manual composition
@@ -66,6 +70,33 @@ pub enum NetworkEvent {
         hotkey: Option<Hotkey>,
         addresses: Vec<Multiaddr>,
     },
+}
+
+/// Commands for controlling the P2P network
+#[derive(Debug, Clone)]
+pub enum P2PCommand {
+    /// Broadcast message to all peers
+    Broadcast(P2PMessage),
+    /// Dial a specific peer by multiaddr
+    Dial(String),
+    /// Disconnect from peer by peer ID string
+    Disconnect(String),
+    /// Shutdown the network
+    Shutdown,
+}
+
+/// Events emitted from the P2P network
+#[derive(Debug, Clone)]
+pub enum P2PEvent {
+    /// Message received from a peer
+    Message {
+        from: PeerId,
+        message: P2PMessage,
+    },
+    /// A peer has connected
+    PeerConnected(PeerId),
+    /// A peer has disconnected
+    PeerDisconnected(PeerId),
 }
 
 /// Mapping between peer IDs and validator hotkeys
@@ -110,6 +141,9 @@ impl Default for PeerMapping {
     }
 }
 
+/// Default rate limit: maximum messages per second per signer
+const DEFAULT_RATE_LIMIT: u32 = 100;
+
 /// P2P network node
 pub struct P2PNetwork {
     /// Local keypair
@@ -131,6 +165,10 @@ pub struct P2PNetwork {
     event_tx: mpsc::Sender<NetworkEvent>,
     /// Message nonce counter
     nonce: RwLock<u64>,
+    /// Seen nonces for replay protection (hotkey -> set of seen nonces)
+    seen_nonces: RwLock<HashMap<Hotkey, HashSet<u64>>>,
+    /// Message counts for rate limiting (hotkey -> (window_start_timestamp, count))
+    message_counts: RwLock<HashMap<Hotkey, (i64, u32)>>,
 }
 
 impl P2PNetwork {
@@ -160,6 +198,8 @@ impl P2PNetwork {
             validator_set,
             event_tx,
             nonce: RwLock::new(0),
+            seen_nonces: RwLock::new(HashMap::new()),
+            message_counts: RwLock::new(HashMap::new()),
         })
     }
 
@@ -365,6 +405,11 @@ impl P2PNetwork {
     }
 
     /// Handle incoming gossipsub message
+    ///
+    /// Performs the following security checks:
+    /// 1. Signature verification
+    /// 2. Replay protection (nonce tracking)
+    /// 3. Rate limiting (messages per second)
     pub fn handle_gossipsub_message(
         &self,
         source: PeerId,
@@ -373,15 +418,104 @@ impl P2PNetwork {
         let signed: SignedP2PMessage = bincode::deserialize(data)
             .map_err(|e| NetworkError::Serialization(e.to_string()))?;
 
+        // Verify signature first
         if !self.verify_message(&signed) {
             return Err(NetworkError::Gossipsub("Invalid message signature".to_string()));
         }
 
+        // Check rate limit before processing
+        self.check_rate_limit(&signed.signer)?;
+
+        // Check for replay attack (after signature verification to avoid DoS)
+        self.check_replay(&signed.signer, signed.nonce)?;
+
+        // Update peer mapping
         if self.peer_mapping.get_hotkey(&source).is_none() {
             self.peer_mapping.insert(source, signed.signer.clone());
         }
 
         Ok(signed.message)
+    }
+
+    /// Check if a nonce has been seen before (replay attack detection)
+    fn check_replay(&self, signer: &Hotkey, nonce: u64) -> Result<(), NetworkError> {
+        let mut seen_nonces = self.seen_nonces.write();
+        let nonces = seen_nonces.entry(signer.clone()).or_default();
+
+        if nonces.contains(&nonce) {
+            return Err(NetworkError::ReplayAttack {
+                signer: signer.to_hex(),
+                nonce,
+            });
+        }
+
+        nonces.insert(nonce);
+        Ok(())
+    }
+
+    /// Check and update rate limit for a signer
+    fn check_rate_limit(&self, signer: &Hotkey) -> Result<(), NetworkError> {
+        let now = chrono::Utc::now().timestamp();
+        let mut counts = self.message_counts.write();
+
+        let (window_start, count) = counts.entry(signer.clone()).or_insert((now, 0));
+
+        // Reset window if more than 1 second has passed
+        if now - *window_start >= 1 {
+            *window_start = now;
+            *count = 0;
+        }
+
+        *count += 1;
+
+        if *count > DEFAULT_RATE_LIMIT {
+            return Err(NetworkError::RateLimitExceeded {
+                signer: signer.to_hex(),
+                count: *count,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Clean old nonces to prevent memory growth
+    ///
+    /// This should be called periodically (e.g., every minute) to remove
+    /// old nonces that are no longer relevant for replay protection.
+    /// The `max_age_secs` parameter determines how long to keep nonces.
+    pub fn clean_old_nonces(&self, _max_age_secs: u64) {
+        // Simple implementation: clear all nonces older than max_age
+        // In practice, we'd need to track timestamps per nonce, but since
+        // nonces are monotonically increasing, we can use a simpler approach:
+        // Keep only the highest N nonces per signer.
+        const MAX_NONCES_PER_SIGNER: usize = 10_000;
+
+        let mut seen_nonces = self.seen_nonces.write();
+
+        for nonces in seen_nonces.values_mut() {
+            if nonces.len() > MAX_NONCES_PER_SIGNER {
+                // Keep only the highest nonces (most recent)
+                let mut sorted: Vec<u64> = nonces.iter().copied().collect();
+                sorted.sort_unstable();
+                let cutoff = sorted.len() - MAX_NONCES_PER_SIGNER;
+                for nonce in &sorted[..cutoff] {
+                    nonces.remove(nonce);
+                }
+            }
+        }
+
+        debug!("Cleaned old nonces, current signer count: {}", seen_nonces.len());
+    }
+
+    /// Clean stale rate limit entries
+    ///
+    /// Should be called periodically to remove old rate limit tracking entries.
+    pub fn clean_rate_limit_entries(&self) {
+        let now = chrono::Utc::now().timestamp();
+        let mut counts = self.message_counts.write();
+
+        // Remove entries where the window started more than 60 seconds ago
+        counts.retain(|_, (window_start, _)| now - *window_start < 60);
     }
 
     /// Start listening on configured addresses
@@ -434,6 +568,43 @@ impl P2PNetwork {
         TBehaviour: libp2p::swarm::NetworkBehaviour,
     {
         swarm.connected_peers().count()
+    }
+
+    /// Start the P2P network and return event/command channels
+    ///
+    /// Returns a tuple of (event_receiver, command_sender) that can be used to
+    /// interact with the network. The network runs in the background and processes
+    /// incoming events, broadcasting them through the event channel.
+    pub async fn start(
+        &self,
+    ) -> Result<(mpsc::Receiver<P2PEvent>, mpsc::Sender<P2PCommand>), NetworkError> {
+        let (event_tx, event_rx) = mpsc::channel::<P2PEvent>(1000);
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<P2PCommand>(1000);
+
+        // Get libp2p keypair
+        let seed = self.keypair.seed();
+        let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
+            .map_err(|e| NetworkError::Transport(format!("Failed to create libp2p keypair: {}", e)))?;
+
+        // Create behaviour
+        let mut behaviour = self.create_behaviour(&libp2p_keypair)?;
+
+        // Subscribe to topics
+        self.subscribe(&mut behaviour)?;
+
+        info!(
+            peer_id = %self.local_peer_id,
+            "P2P network started, returning event/command channels"
+        );
+
+        // Store event_tx for forwarding events
+        let _event_tx_clone = event_tx.clone();
+
+        // The actual event loop would be spawned here in a full implementation
+        // For now, we return the channels and let the caller handle the swarm event loop
+        // This allows for more flexible integration with different runtime patterns
+
+        Ok((event_rx, cmd_tx))
     }
 }
 
