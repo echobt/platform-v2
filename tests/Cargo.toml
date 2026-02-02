@@ -32,9 +32,14 @@ path = "epoch_tests.rs"
 name = "sudo_action_tests"
 path = "sudo_action_tests.rs"
 
+[[test]]
+name = "blockchain_state_tests"
+path = "blockchain_state_tests.rs"
+
 [dependencies]
 platform-core = { path = "../crates/core" }
 platform-storage = { path = "../crates/storage" }
+platform-p2p-consensus = { path = "../crates/p2p-consensus" }
 
 tokio = { version = "1.40", features = ["full", "test-util"] }
 tempfile = "3.12"

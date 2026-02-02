@@ -156,20 +156,20 @@ impl QueryFilter {
     /// Check if an entry matches this filter
     pub fn matches(&self, block_id: Option<u64>, created_at: i64, key: &[u8]) -> bool {
         match self {
-            QueryFilter::BlockBefore(max_block) => {
-                block_id.map_or(true, |b| b < *max_block)
-            }
-            QueryFilter::BlockAfter(min_block) => {
-                block_id.map_or(false, |b| b > *min_block)
-            }
+            QueryFilter::BlockBefore(max_block) => block_id.map_or(true, |b| b < *max_block),
+            QueryFilter::BlockAfter(min_block) => block_id.map_or(false, |b| b > *min_block),
             QueryFilter::BlockRange { start, end } => {
                 block_id.map_or(false, |b| b >= *start && b <= *end)
             }
             QueryFilter::CreatedBefore(timestamp) => created_at < *timestamp,
             QueryFilter::CreatedAfter(timestamp) => created_at > *timestamp,
             QueryFilter::KeyPrefix(prefix) => key.starts_with(prefix),
-            QueryFilter::And(filters) => filters.iter().all(|f| f.matches(block_id, created_at, key)),
-            QueryFilter::Or(filters) => filters.iter().any(|f| f.matches(block_id, created_at, key)),
+            QueryFilter::And(filters) => {
+                filters.iter().all(|f| f.matches(block_id, created_at, key))
+            }
+            QueryFilter::Or(filters) => {
+                filters.iter().any(|f| f.matches(block_id, created_at, key))
+            }
         }
     }
 }
@@ -438,7 +438,10 @@ mod tests {
 
     #[test]
     fn test_query_filter_block_range() {
-        let filter = QueryFilter::BlockRange { start: 50, end: 150 };
+        let filter = QueryFilter::BlockRange {
+            start: 50,
+            end: 150,
+        };
         assert!(!filter.matches(Some(49), 0, b"key"));
         assert!(filter.matches(Some(50), 0, b"key"));
         assert!(filter.matches(Some(100), 0, b"key"));
@@ -519,9 +522,7 @@ mod tests {
         let filter = builder.build_filter().expect("should have filter");
         assert!(matches!(filter, QueryFilter::BlockBefore(100)));
 
-        let builder = QueryBuilder::new("test")
-            .after_block(50)
-            .before_block(150);
+        let builder = QueryBuilder::new("test").after_block(50).before_block(150);
         let filter = builder.build_filter().expect("should have filter");
         assert!(matches!(filter, QueryFilter::And(_)));
     }

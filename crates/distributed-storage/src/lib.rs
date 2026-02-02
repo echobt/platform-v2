@@ -100,13 +100,13 @@ pub use dht::{
 };
 pub use error::{StorageError, StorageResult};
 pub use local::{LocalStorage, LocalStorageBuilder, ReplicationInfo};
-pub use replication::{
-    ConflictResolution, ConflictResolver, QuorumCalculator, ReplicationConfig, ReplicationManager,
-    ReplicationPolicy, ReplicationState,
-};
 pub use query::{
     block_index_key, block_range_end, block_range_start, parse_block_index_key, QueryBuilder,
     QueryCursor, QueryFilter, QueryResult,
+};
+pub use replication::{
+    ConflictResolution, ConflictResolver, QuorumCalculator, ReplicationConfig, ReplicationManager,
+    ReplicationPolicy, ReplicationState,
 };
 pub use store::{
     DistributedStore, DistributedStoreExt, GetOptions, ListResult, PutOptions, StorageKey,

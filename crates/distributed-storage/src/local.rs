@@ -196,7 +196,8 @@ impl LocalStorage {
         // Update block index if block_id is present
         if let Some(block_id) = entry.block_id {
             let block_key = block_index_key(&key.namespace, block_id, key);
-            self.block_index_tree.insert(&block_key, db_key.as_slice())?;
+            self.block_index_tree
+                .insert(&block_key, db_key.as_slice())?;
         }
 
         // Update namespace count only for new entries
@@ -853,7 +854,11 @@ impl DistributedStore for LocalStorage {
         // Build cursor for next page
         let next_cursor = if has_more && !results.is_empty() {
             let (last_key, _, last_block) = results.last().expect("results not empty");
-            Some(QueryCursor::from_last_item(namespace, *last_block, last_key))
+            Some(QueryCursor::from_last_item(
+                namespace,
+                *last_block,
+                last_key,
+            ))
         } else {
             None
         };
@@ -1244,7 +1249,12 @@ mod tests {
         for block in [50, 100, 150, 200, 250] {
             let key = StorageKey::new("submissions", format!("hash-block-{}", block));
             storage
-                .put_with_block(key, format!("data-{}", block).into_bytes(), block, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1267,7 +1277,12 @@ mod tests {
         for block in [50, 100, 150, 200, 250] {
             let key = StorageKey::new("submissions", format!("hash-block-{}", block));
             storage
-                .put_with_block(key, format!("data-{}", block).into_bytes(), block, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1290,7 +1305,12 @@ mod tests {
         for block in [50, 100, 150, 200, 250] {
             let key = StorageKey::new("submissions", format!("hash-block-{}", block));
             storage
-                .put_with_block(key, format!("data-{}", block).into_bytes(), block, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1353,7 +1373,12 @@ mod tests {
         for block in [50, 100, 150, 200, 250, 300] {
             let key = StorageKey::new("submissions", format!("hash-block-{}", block));
             storage
-                .put_with_block(key, format!("data-{}", block).into_bytes(), block, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1378,7 +1403,12 @@ mod tests {
         for block in 0..10 {
             let key = StorageKey::new("submissions", format!("hash-block-{:02}", block));
             storage
-                .put_with_block(key, format!("data-{}", block).into_bytes(), block * 10, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block * 10,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1441,7 +1471,10 @@ mod tests {
             .expect("put_with_block failed");
 
         // Verify it's at block 100
-        let result = storage.list_range("submissions", 100, 100, 10).await.expect("list_range failed");
+        let result = storage
+            .list_range("submissions", 100, 100, 10)
+            .await
+            .expect("list_range failed");
         assert_eq!(result.items.len(), 1);
 
         // Re-put at block 200
@@ -1451,11 +1484,17 @@ mod tests {
             .expect("put_with_block failed");
 
         // Should not be at block 100 anymore
-        let result = storage.list_range("submissions", 100, 100, 10).await.expect("list_range failed");
+        let result = storage
+            .list_range("submissions", 100, 100, 10)
+            .await
+            .expect("list_range failed");
         assert_eq!(result.items.len(), 0);
 
         // Should be at block 200
-        let result = storage.list_range("submissions", 200, 200, 10).await.expect("list_range failed");
+        let result = storage
+            .list_range("submissions", 200, 200, 10)
+            .await
+            .expect("list_range failed");
         assert_eq!(result.items.len(), 1);
     }
 
@@ -1471,14 +1510,20 @@ mod tests {
             .expect("put_with_block failed");
 
         // Verify it exists in block index
-        let result = storage.list_range("submissions", 100, 100, 10).await.expect("list_range failed");
+        let result = storage
+            .list_range("submissions", 100, 100, 10)
+            .await
+            .expect("list_range failed");
         assert_eq!(result.items.len(), 1);
 
         // Delete
         storage.delete(&key).await.expect("delete failed");
 
         // Should no longer be in block index
-        let result = storage.list_range("submissions", 100, 100, 10).await.expect("list_range failed");
+        let result = storage
+            .list_range("submissions", 100, 100, 10)
+            .await
+            .expect("list_range failed");
         assert_eq!(result.items.len(), 0);
     }
 
@@ -1487,13 +1532,22 @@ mod tests {
         let storage = create_test_storage();
 
         // Query empty namespace
-        let result = storage.list_before_block("empty", 1000, 100).await.expect("list_before_block failed");
+        let result = storage
+            .list_before_block("empty", 1000, 100)
+            .await
+            .expect("list_before_block failed");
         assert!(result.is_empty());
 
-        let result = storage.list_after_block("empty", 0, 100).await.expect("list_after_block failed");
+        let result = storage
+            .list_after_block("empty", 0, 100)
+            .await
+            .expect("list_after_block failed");
         assert!(result.is_empty());
 
-        let result = storage.list_range("empty", 0, 1000, 100).await.expect("list_range failed");
+        let result = storage
+            .list_range("empty", 0, 1000, 100)
+            .await
+            .expect("list_range failed");
         assert!(result.is_empty());
     }
 }

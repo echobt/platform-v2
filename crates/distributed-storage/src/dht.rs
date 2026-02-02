@@ -581,7 +581,9 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
         limit: usize,
     ) -> StorageResult<crate::query::QueryResult> {
         // Block-indexed queries are always local (DHT doesn't support range queries)
-        self.local.list_before_block(namespace, block_id, limit).await
+        self.local
+            .list_before_block(namespace, block_id, limit)
+            .await
     }
 
     async fn list_after_block(
@@ -591,7 +593,9 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
         limit: usize,
     ) -> StorageResult<crate::query::QueryResult> {
         // Block-indexed queries are always local
-        self.local.list_after_block(namespace, block_id, limit).await
+        self.local
+            .list_after_block(namespace, block_id, limit)
+            .await
     }
 
     async fn list_range(
@@ -602,14 +606,19 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
         limit: usize,
     ) -> StorageResult<crate::query::QueryResult> {
         // Block-indexed queries are always local
-        self.local.list_range(namespace, start_block, end_block, limit).await
+        self.local
+            .list_range(namespace, start_block, end_block, limit)
+            .await
     }
 
     async fn count_by_namespace(&self, namespace: &str) -> StorageResult<u64> {
         self.local.count_by_namespace(namespace).await
     }
 
-    async fn query(&self, query: crate::query::QueryBuilder) -> StorageResult<crate::query::QueryResult> {
+    async fn query(
+        &self,
+        query: crate::query::QueryBuilder,
+    ) -> StorageResult<crate::query::QueryResult> {
         // Complex queries are always local
         self.local.query(query).await
     }

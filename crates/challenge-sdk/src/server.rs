@@ -947,9 +947,7 @@ mod async_tests {
 
             // Check if should fail
             if self.should_fail_evaluate.load(Ordering::SeqCst) {
-                return Err(ChallengeError::Evaluation(
-                    "Configured to fail".to_string(),
-                ));
+                return Err(ChallengeError::Evaluation("Configured to fail".to_string()));
             }
 
             // Return success with configured score
@@ -1094,7 +1092,10 @@ mod async_tests {
         let elapsed = start.elapsed();
 
         // Verify the delay was applied
-        assert!(elapsed.as_millis() >= 50, "Should have delayed at least 50ms");
+        assert!(
+            elapsed.as_millis() >= 50,
+            "Should have delayed at least 50ms"
+        );
         // Note: execution_time_ms is set to 0 by default in the trait method
         // The actual time tracking happens in the HTTP handler
         assert!(result.success);
@@ -1260,7 +1261,7 @@ mod async_tests {
     fn test_config_response_limits_with_values() {
         let limits = ConfigLimits {
             max_submission_size: Some(10 * 1024 * 1024), // 10MB
-            max_evaluation_time: Some(3600),              // 1 hour
+            max_evaluation_time: Some(3600),             // 1 hour
             max_cost: Some(1.0),
         };
 
@@ -1552,7 +1553,7 @@ mod async_tests {
             .host("first.host")
             .port(1111)
             .host("second.host") // Overwrite
-            .port(2222)         // Overwrite
+            .port(2222) // Overwrite
             .build();
 
         assert_eq!(server.address(), "second.host:2222");
@@ -1582,7 +1583,13 @@ mod async_tests {
 
     #[test]
     fn test_server_builder_custom_hosts() {
-        let hosts = ["localhost", "0.0.0.0", "127.0.0.1", "192.168.1.1", "10.0.0.1"];
+        let hosts = [
+            "localhost",
+            "0.0.0.0",
+            "127.0.0.1",
+            "192.168.1.1",
+            "10.0.0.1",
+        ];
         for host in hosts {
             let server = ChallengeServer::builder(TestChallenge::default())
                 .host(host)

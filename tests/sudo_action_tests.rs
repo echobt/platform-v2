@@ -8,9 +8,9 @@
 //! - ChallengeContainerConfig validation
 
 use platform_core::{
-    ChallengeContainerConfig, ChallengeId, ChainState, Hotkey, Keypair, NetworkConfig,
-    NetworkMessage, ProposalAction, SignedNetworkMessage, Stake, SudoAction, ValidatorInfo,
-    SUDO_KEY_BYTES, is_production_sudo, production_sudo_key,
+    is_production_sudo, production_sudo_key, ChainState, ChallengeContainerConfig, ChallengeId,
+    Hotkey, Keypair, NetworkConfig, NetworkMessage, ProposalAction, SignedNetworkMessage, Stake,
+    SudoAction, ValidatorInfo, SUDO_KEY_BYTES,
 };
 
 // ============================================================================
@@ -65,9 +65,7 @@ fn test_sudo_add_challenge_valid_image() {
     );
 
     // Add challenge config to state
-    state
-        .challenge_configs
-        .insert(challenge_id, config.clone());
+    state.challenge_configs.insert(challenge_id, config.clone());
     state.update_hash();
 
     // Verify it was added
@@ -256,8 +254,8 @@ fn test_emergency_pause_requires_sudo() {
         reason: "Test".to_string(),
     };
     let msg = NetworkMessage::SudoAction(pause_action);
-    let signed_sudo = SignedNetworkMessage::new(msg.clone(), &sudo_kp)
-        .expect("Should sign message");
+    let signed_sudo =
+        SignedNetworkMessage::new(msg.clone(), &sudo_kp).expect("Should sign message");
 
     // Verify signature is valid
     assert!(signed_sudo.verify().unwrap());
@@ -269,8 +267,8 @@ fn test_emergency_pause_requires_sudo() {
     let non_sudo_msg = NetworkMessage::SudoAction(SudoAction::EmergencyPause {
         reason: "Unauthorized".to_string(),
     });
-    let signed_non_sudo = SignedNetworkMessage::new(non_sudo_msg, &non_sudo_kp)
-        .expect("Should sign message");
+    let signed_non_sudo =
+        SignedNetworkMessage::new(non_sudo_msg, &non_sudo_kp).expect("Should sign message");
 
     // Signature is valid but signer is not sudo
     assert!(signed_non_sudo.verify().unwrap());
@@ -475,12 +473,8 @@ fn test_challenge_config_validate_emission_weight_bounds() {
     // Valid emission weights
     let valid_weights = vec![0.0, 0.5, 1.0, 0.001, 0.999];
     for weight in valid_weights {
-        let config = ChallengeContainerConfig::new(
-            "Test",
-            "ghcr.io/platformnetwork/test:v1",
-            0,
-            weight,
-        );
+        let config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 0, weight);
         assert!(
             config.validate().is_ok(),
             "Weight {} should be valid",
@@ -491,18 +485,10 @@ fn test_challenge_config_validate_emission_weight_bounds() {
     // Invalid emission weights (out of bounds)
     let invalid_weights = vec![-0.1, 1.1, -1.0, 2.0, f64::INFINITY, f64::NEG_INFINITY];
     for weight in invalid_weights {
-        let config = ChallengeContainerConfig::new(
-            "Test",
-            "ghcr.io/platformnetwork/test:v1",
-            0,
-            weight,
-        );
+        let config =
+            ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 0, weight);
         let result = config.validate();
-        assert!(
-            result.is_err(),
-            "Weight {} should be invalid",
-            weight
-        );
+        assert!(result.is_err(), "Weight {} should be invalid", weight);
         if result.is_err() {
             assert!(
                 result.unwrap_err().contains("Emission weight"),
@@ -514,9 +500,8 @@ fn test_challenge_config_validate_emission_weight_bounds() {
 
 #[test]
 fn test_challenge_config_validate_resource_limits() {
-    let base_config = || {
-        ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 0, 0.5)
-    };
+    let base_config =
+        || ChallengeContainerConfig::new("Test", "ghcr.io/platformnetwork/test:v1", 0, 0.5);
 
     // Test CPU cores validation
     let mut config = base_config();
@@ -554,12 +539,7 @@ fn test_challenge_config_validate_resource_limits() {
 
 #[test]
 fn test_challenge_config_validate_empty_name() {
-    let config = ChallengeContainerConfig::new(
-        "",
-        "ghcr.io/platformnetwork/test:v1",
-        0,
-        0.5,
-    );
+    let config = ChallengeContainerConfig::new("", "ghcr.io/platformnetwork/test:v1", 0, 0.5);
     let result = config.validate();
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("name cannot be empty"));
@@ -608,10 +588,9 @@ fn test_sudo_action_serialization_roundtrip() {
                 SudoAction::EmergencyPause { reason: r2 },
             ) => assert_eq!(r1, r2),
             (SudoAction::Resume, SudoAction::Resume) => {}
-            (
-                SudoAction::RemoveChallenge { id: id1 },
-                SudoAction::RemoveChallenge { id: id2 },
-            ) => assert_eq!(id1, id2),
+            (SudoAction::RemoveChallenge { id: id1 }, SudoAction::RemoveChallenge { id: id2 }) => {
+                assert_eq!(id1, id2)
+            }
             (
                 SudoAction::SetChallengeWeight {
                     challenge_id: c1,

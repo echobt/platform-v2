@@ -148,9 +148,7 @@ impl LeafCache {
 
     /// Find the index of a submission leaf
     fn submission_index(&self, key: &str) -> Option<usize> {
-        self.submissions
-            .keys()
-            .position(|k| k == key)
+        self.submissions.keys().position(|k| k == key)
     }
 
     /// Find the index of an evaluation leaf
@@ -262,11 +260,15 @@ impl<S: DistributedStore> ChallengeStore<S> {
         data: &StoredSubmission,
     ) -> StorageResult<MerkleProof> {
         let key = self.submission_key(hash);
-        let bytes = data.to_bytes().map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let bytes = data
+            .to_bytes()
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let data_hash = hash_bytes(&bytes);
 
         // Store the data
-        self.inner.put(key, bytes.clone(), PutOptions::default()).await?;
+        self.inner
+            .put(key, bytes.clone(), PutOptions::default())
+            .await?;
 
         // Update the leaf cache
         {
@@ -312,7 +314,10 @@ impl<S: DistributedStore> ChallengeStore<S> {
     /// A vector of stored submissions.
     pub async fn list_submissions(&self, limit: usize) -> StorageResult<Vec<StoredSubmission>> {
         let namespace = self.namespace("submissions");
-        let result = self.inner.list_prefix(&namespace, None, limit, None).await?;
+        let result = self
+            .inner
+            .list_prefix(&namespace, None, limit, None)
+            .await?;
 
         let mut submissions = Vec::with_capacity(result.items.len());
         for (_, stored) in result.items {
@@ -346,11 +351,15 @@ impl<S: DistributedStore> ChallengeStore<S> {
         eval: &StoredEvaluation,
     ) -> StorageResult<MerkleProof> {
         let key = self.evaluation_key(submission_hash, validator);
-        let bytes = eval.to_bytes().map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let bytes = eval
+            .to_bytes()
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let data_hash = hash_bytes(&bytes);
 
         // Store the data
-        self.inner.put(key, bytes.clone(), PutOptions::default()).await?;
+        self.inner
+            .put(key, bytes.clone(), PutOptions::default())
+            .await?;
 
         // Update the leaf cache
         let cache_key = format!("{}:{}", submission_hash, validator);
@@ -413,11 +422,15 @@ impl<S: DistributedStore> ChallengeStore<S> {
         weights: &StoredWeights,
     ) -> StorageResult<MerkleProof> {
         let key = self.weights_key(epoch);
-        let bytes = weights.to_bytes().map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let bytes = weights
+            .to_bytes()
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let data_hash = hash_bytes(&bytes);
 
         // Store the data
-        self.inner.put(key, bytes.clone(), PutOptions::default()).await?;
+        self.inner
+            .put(key, bytes.clone(), PutOptions::default())
+            .await?;
 
         // Update the leaf cache
         {
@@ -516,7 +529,10 @@ impl<S: DistributedStore> ChallengeStore<S> {
 
         // Load submissions
         let submissions_ns = self.namespace("submissions");
-        let submissions = self.inner.list_prefix(&submissions_ns, None, 10000, None).await?;
+        let submissions = self
+            .inner
+            .list_prefix(&submissions_ns, None, 10000, None)
+            .await?;
         for (key, stored) in submissions.items {
             if let Some(hash) = key.key_string() {
                 cache.submissions.insert(hash, hash_bytes(&stored.data));
@@ -525,7 +541,10 @@ impl<S: DistributedStore> ChallengeStore<S> {
 
         // Load evaluations
         let evaluations_ns = self.namespace("evaluations");
-        let evaluations = self.inner.list_prefix(&evaluations_ns, None, 100000, None).await?;
+        let evaluations = self
+            .inner
+            .list_prefix(&evaluations_ns, None, 100000, None)
+            .await?;
         for (key, stored) in evaluations.items {
             if let Some(k) = key.key_string() {
                 cache.evaluations.insert(k, hash_bytes(&stored.data));
@@ -534,7 +553,10 @@ impl<S: DistributedStore> ChallengeStore<S> {
 
         // Load weights
         let weights_ns = self.namespace("weights");
-        let weights = self.inner.list_prefix(&weights_ns, None, 10000, None).await?;
+        let weights = self
+            .inner
+            .list_prefix(&weights_ns, None, 10000, None)
+            .await?;
         for (key, stored) in weights.items {
             if let Some(epoch_str) = key.key_string() {
                 if let Ok(epoch) = epoch_str.parse::<u64>() {
@@ -795,7 +817,11 @@ pub trait ChallengeStorage: Send + Sync {
     async fn get_evaluations(&self, submission_hash: &str) -> StorageResult<Vec<StoredEvaluation>>;
 
     /// Store weights
-    async fn store_weights(&self, epoch: u64, weights: &StoredWeights) -> StorageResult<MerkleProof>;
+    async fn store_weights(
+        &self,
+        epoch: u64,
+        weights: &StoredWeights,
+    ) -> StorageResult<MerkleProof>;
 
     /// Get weights for an epoch
     async fn get_weights(&self, epoch: u64) -> StorageResult<Option<StoredWeights>>;
@@ -947,10 +973,7 @@ mod tests {
         }
 
         // List
-        let submissions = store
-            .list_submissions(10)
-            .await
-            .expect("Failed to list");
+        let submissions = store.list_submissions(10).await.expect("Failed to list");
 
         assert_eq!(submissions.len(), 5);
     }
@@ -1179,7 +1202,10 @@ mod tests {
         let root_before = store.compute_state_root().await;
 
         // Rebuild cache (simulating restart)
-        store.rebuild_cache().await.expect("Failed to rebuild cache");
+        store
+            .rebuild_cache()
+            .await
+            .expect("Failed to rebuild cache");
 
         let root_after = store.compute_state_root().await;
 

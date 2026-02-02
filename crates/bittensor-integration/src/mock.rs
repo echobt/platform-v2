@@ -35,7 +35,7 @@ impl MockNeuronBuilder {
     pub fn new(uid: u64) -> Self {
         let mut hotkey = [0u8; 32];
         hotkey[0..8].copy_from_slice(&uid.to_le_bytes());
-        
+
         Self {
             uid,
             netuid: 1,
@@ -226,7 +226,7 @@ impl MockNeuronData {
     pub fn to_neuron_info(&self) -> NeuronInfo {
         let hotkey = AccountId32::new(self.hotkey);
         let coldkey = AccountId32::new(self.coldkey);
-        
+
         NeuronInfo {
             uid: self.uid,
             netuid: self.netuid,
@@ -328,12 +328,12 @@ impl MockMetagraphBuilder {
     /// Build the mock metagraph
     pub fn build(self) -> Metagraph {
         let mut neurons = HashMap::new();
-        
+
         for data in &self.neurons {
             let neuron_info = data.to_neuron_info();
             neurons.insert(data.uid, neuron_info);
         }
-        
+
         Metagraph {
             netuid: self.netuid,
             n: neurons.len() as u64,
@@ -356,7 +356,7 @@ pub fn random_hotkey() -> [u8; 32] {
 
 /// Helper function to create a hotkey from a deterministic seed
 pub fn hotkey_from_seed(seed: u64) -> [u8; 32] {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(seed.to_le_bytes());
     let result = hasher.finalize();
@@ -366,10 +366,14 @@ pub fn hotkey_from_seed(seed: u64) -> [u8; 32] {
 }
 
 /// Helper function to create multiple validators with sequential UIDs
-pub fn create_validators(count: u16, min_stake_tao: f64, max_stake_tao: f64) -> Vec<MockNeuronData> {
+pub fn create_validators(
+    count: u16,
+    min_stake_tao: f64,
+    max_stake_tao: f64,
+) -> Vec<MockNeuronData> {
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    
+
     (0..count)
         .map(|uid| {
             let stake_tao = rng.gen_range(min_stake_tao..=max_stake_tao);
@@ -401,7 +405,7 @@ mod tests {
     #[test]
     fn test_mock_neuron_builder_defaults() {
         let neuron = MockNeuronBuilder::new(5).build();
-        
+
         assert_eq!(neuron.uid, 5);
         assert_eq!(neuron.stake, 0);
         assert_eq!(neuron.root_stake, 0);
@@ -414,7 +418,7 @@ mod tests {
             .stake_tao(100.0)
             .root_stake_tao(50.0)
             .build();
-        
+
         assert_eq!(neuron.stake, 100_000_000_000); // 100 TAO in RAO
         assert_eq!(neuron.root_stake, 50_000_000_000); // 50 TAO in RAO
     }
@@ -426,12 +430,12 @@ mod tests {
             .trust(0.8)
             .consensus(0.9)
             .build();
-        
+
         // Scores are stored as f64 * u16::MAX
         let expected_incentive = 0.5 * u16::MAX as f64;
         let expected_trust = 0.8 * u16::MAX as f64;
         let expected_consensus = 0.9 * u16::MAX as f64;
-        
+
         assert!((neuron.incentive - expected_incentive).abs() < 0.001);
         assert!((neuron.trust - expected_trust).abs() < 0.001);
         assert!((neuron.consensus - expected_consensus).abs() < 0.001);
@@ -441,21 +445,21 @@ mod tests {
     fn test_mock_metagraph_builder() {
         let hotkey1 = [1u8; 32];
         let hotkey2 = [2u8; 32];
-        
+
         let metagraph = MockMetagraphBuilder::new(100)
             .block(5000)
             .add_validator(0, hotkey1, 1000.0)
             .add_validator(1, hotkey2, 500.0)
             .build();
-        
+
         assert_eq!(metagraph.netuid, 100);
         assert_eq!(metagraph.n, 2);
         assert_eq!(metagraph.block, 5000);
         assert_eq!(metagraph.neurons.len(), 2);
-        
+
         let neuron0 = metagraph.neurons.get(&0).expect("neuron 0 exists");
         let neuron1 = metagraph.neurons.get(&1).expect("neuron 1 exists");
-        
+
         assert_eq!(neuron0.stake, 1000_000_000_000);
         assert_eq!(neuron1.stake, 500_000_000_000);
     }
@@ -466,9 +470,9 @@ mod tests {
             .add_miner(0, [10u8; 32])
             .add_miner(1, [11u8; 32])
             .build();
-        
+
         assert_eq!(metagraph.n, 2);
-        
+
         for (_, neuron) in &metagraph.neurons {
             assert_eq!(neuron.stake, 0);
         }
@@ -479,7 +483,7 @@ mod tests {
         let hotkey1 = hotkey_from_seed(42);
         let hotkey2 = hotkey_from_seed(42);
         let hotkey3 = hotkey_from_seed(43);
-        
+
         assert_eq!(hotkey1, hotkey2);
         assert_ne!(hotkey1, hotkey3);
     }
@@ -487,9 +491,9 @@ mod tests {
     #[test]
     fn test_create_validators() {
         let validators = create_validators(5, 100.0, 1000.0);
-        
+
         assert_eq!(validators.len(), 5);
-        
+
         for (i, v) in validators.iter().enumerate() {
             assert_eq!(v.uid, i as u64);
             assert!(v.validator_permit);
@@ -502,7 +506,7 @@ mod tests {
     #[test]
     fn test_create_test_metagraph() {
         let metagraph = create_test_metagraph(100, 10, 500.0);
-        
+
         assert_eq!(metagraph.netuid, 100);
         assert_eq!(metagraph.n, 10);
         assert_eq!(metagraph.neurons.len(), 10);
@@ -511,23 +515,23 @@ mod tests {
     #[test]
     fn test_metagraph_neuron_hotkey_conversion() {
         use sp_core::crypto::Ss58Codec;
-        
+
         let hotkey_bytes = [1u8; 32];
         let metagraph = MockMetagraphBuilder::new(1)
             .add_validator(0, hotkey_bytes, 100.0)
             .build();
-        
+
         let neuron = metagraph.neurons.get(&0).expect("neuron exists");
-        
+
         // Verify the hotkey can be converted to SS58
         let ss58 = neuron.hotkey.to_ss58check();
         assert!(!ss58.is_empty());
-        
+
         // Verify we can get the bytes back
         let hotkey_ref: &[u8; 32] = neuron.hotkey.as_ref();
         assert_eq!(hotkey_ref, &hotkey_bytes);
     }
-    
+
     #[test]
     fn test_metagraph_has_required_fields() {
         let metagraph = MockMetagraphBuilder::new(100)
@@ -535,13 +539,13 @@ mod tests {
             .version(2)
             .add_validator(0, [1u8; 32], 500.0)
             .build();
-        
+
         assert_eq!(metagraph.netuid, 100);
         assert_eq!(metagraph.block, 1000);
         assert_eq!(metagraph.version, 2);
         assert!(metagraph.axons.is_empty()); // No axons by default
     }
-    
+
     #[test]
     fn test_neuron_info_conversion() {
         let data = MockNeuronBuilder::new(5)
@@ -555,9 +559,9 @@ mod tests {
             .validator_permit(true)
             .active(true)
             .build();
-        
+
         let neuron_info = data.to_neuron_info();
-        
+
         assert_eq!(neuron_info.uid, 5);
         assert_eq!(neuron_info.netuid, 100);
         assert_eq!(neuron_info.stake, 1000_000_000_000);
