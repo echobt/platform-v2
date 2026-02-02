@@ -367,7 +367,15 @@ impl ChainState {
             record.finalized_at = Some(chrono::Utc::now().timestamp_millis());
 
             // Move to completed
-            let completed = self.pending_evaluations.remove(submission_id).unwrap();
+            let completed = self
+                .pending_evaluations
+                .remove(submission_id)
+                .ok_or_else(|| {
+                    StateError::ChallengeNotFound(format!(
+                        "Submission '{}' was removed during finalization",
+                        submission_id
+                    ))
+                })?;
             self.completed_evaluations
                 .entry(self.epoch)
                 .or_default()
@@ -499,10 +507,28 @@ impl ChainState {
         Some(final_weights)
     }
 
+    /// Maximum epochs to keep in historical_weights
+    const MAX_HISTORICAL_EPOCHS: usize = 100;
+
     /// Transition to next epoch
     pub fn next_epoch(&mut self) {
         self.epoch += 1;
         self.weight_votes = None;
+
+        // Prune old historical weights to prevent unbounded growth
+        if self.historical_weights.len() > Self::MAX_HISTORICAL_EPOCHS {
+            let cutoff_epoch = self
+                .epoch
+                .saturating_sub(Self::MAX_HISTORICAL_EPOCHS as u64);
+            self.historical_weights
+                .retain(|epoch, _| *epoch > cutoff_epoch);
+            debug!(
+                retained_epochs = self.historical_weights.len(),
+                cutoff = cutoff_epoch,
+                "Pruned historical weights"
+            );
+        }
+
         self.increment_sequence();
         info!(epoch = self.epoch, "Transitioned to new epoch");
     }
@@ -586,8 +612,7 @@ impl StateManager {
         F: FnOnce(&mut ChainState) -> R,
     {
         let mut state = self.state.write();
-        let result = f(&mut state);
-        result
+        f(&mut state)
     }
 
     /// Read-only access to state
@@ -695,7 +720,7 @@ pub fn build_merkle_proof(leaves: &[[u8; 32]], leaf_index: usize) -> Option<Merk
     let mut index = leaf_index;
 
     while level.len() > 1 {
-        let sibling_index = if index % 2 == 0 {
+        let sibling_index = if index.is_multiple_of(2) {
             if index + 1 < level.len() {
                 index + 1
             } else {

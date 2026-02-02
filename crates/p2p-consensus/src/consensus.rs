@@ -478,6 +478,8 @@ impl ConsensusEngine {
         &self,
         prepare: PrepareMessage,
     ) -> Result<Option<CommitMessage>, ConsensusError> {
+        use std::collections::hash_map::Entry;
+
         let mut round_guard = self.current_round.write();
         let round = round_guard
             .as_mut()
@@ -531,8 +533,11 @@ impl ConsensusEngine {
             return Err(ConsensusError::InvalidSignature(prepare.validator.to_hex()));
         }
 
-        // Add prepare
-        round.prepares.insert(prepare.validator.clone(), prepare);
+        // Atomic check and insert using Entry API to prevent TOCTOU race
+        match round.prepares.entry(prepare.validator.clone()) {
+            Entry::Occupied(_) => return Err(ConsensusError::AlreadyVoted),
+            Entry::Vacant(entry) => entry.insert(prepare),
+        };
 
         // Check if we have quorum
         let quorum = self.quorum_size();
@@ -545,22 +550,33 @@ impl ConsensusEngine {
                 "Reached prepare quorum"
             );
 
-            // Create commit message
+            // Extract data needed for commit while still holding lock to avoid race condition
+            let view = round.view;
+            let sequence = round.sequence;
+            let proposal_hash = round.proposal_hash;
+
+            // Mark as locally committed while holding lock
+            round.local_committed = true;
+
+            // Create commit message while still holding lock
+            let commit = self.create_commit_internal(view, sequence, proposal_hash)?;
+            round.commits.insert(self.keypair.hotkey(), commit.clone());
+
             drop(round_guard);
-            let commit = self.create_commit()?;
             return Ok(Some(commit));
         }
 
         Ok(None)
     }
 
-    /// Create commit message
-    fn create_commit(&self) -> Result<CommitMessage, ConsensusError> {
-        let round_guard = self.current_round.read();
-        let round = round_guard
-            .as_ref()
-            .ok_or_else(|| ConsensusError::InvalidProposal("No active round".to_string()))?;
-
+    /// Internal commit message creation - does not acquire current_round lock
+    /// Use this when the caller already holds the lock to avoid race conditions
+    fn create_commit_internal(
+        &self,
+        view: ViewNumber,
+        sequence: SequenceNumber,
+        proposal_hash: [u8; 32],
+    ) -> Result<CommitMessage, ConsensusError> {
         #[derive(Serialize)]
         struct SigningData {
             view: ViewNumber,
@@ -569,9 +585,9 @@ impl ConsensusEngine {
         }
 
         let signing_data = SigningData {
-            view: round.view,
-            sequence: round.sequence,
-            proposal_hash: round.proposal_hash,
+            view,
+            sequence,
+            proposal_hash,
         };
 
         let signing_bytes = bincode::serialize(&signing_data)
@@ -582,23 +598,13 @@ impl ConsensusEngine {
             .sign_bytes(&signing_bytes)
             .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-        let commit = CommitMessage {
-            view: round.view,
-            sequence: round.sequence,
-            proposal_hash: round.proposal_hash,
+        Ok(CommitMessage {
+            view,
+            sequence,
+            proposal_hash,
             validator: self.keypair.hotkey(),
             signature,
-        };
-
-        drop(round_guard);
-
-        // Mark as locally committed
-        if let Some(r) = self.current_round.write().as_mut() {
-            r.local_committed = true;
-            r.commits.insert(self.keypair.hotkey(), commit.clone());
-        }
-
-        Ok(commit)
+        })
     }
 
     /// Handle incoming commit message
@@ -606,6 +612,8 @@ impl ConsensusEngine {
         &self,
         commit: CommitMessage,
     ) -> Result<Option<ConsensusDecision>, ConsensusError> {
+        use std::collections::hash_map::Entry;
+
         let mut round_guard = self.current_round.write();
         let round = round_guard
             .as_mut()
@@ -659,8 +667,11 @@ impl ConsensusEngine {
             return Err(ConsensusError::InvalidSignature(commit.validator.to_hex()));
         }
 
-        // Add commit
-        round.commits.insert(commit.validator.clone(), commit);
+        // Atomic check and insert using Entry API to prevent TOCTOU race
+        match round.commits.entry(commit.validator.clone()) {
+            Entry::Occupied(_) => return Err(ConsensusError::AlreadyVoted),
+            Entry::Vacant(entry) => entry.insert(commit),
+        };
 
         // Check if we have quorum
         let quorum = self.quorum_size();
@@ -674,7 +685,9 @@ impl ConsensusEngine {
             );
 
             // Create decision
-            let proposal = round.proposal.as_ref().expect("proposal must exist");
+            let proposal = round.proposal.as_ref().ok_or_else(|| {
+                ConsensusError::InvalidProposal("No proposal in committed round".to_string())
+            })?;
             let decision = ConsensusDecision {
                 view: round.view,
                 sequence: round.sequence,
@@ -902,13 +915,25 @@ impl ConsensusEngine {
             started_at: chrono::Utc::now().timestamp_millis(),
         });
 
+        // Handle view number mismatch
         if view_change.new_view != state.new_view {
-            // Different view change - if higher, switch to it
             if view_change.new_view > state.new_view {
+                // Higher view - switch to it
+                info!(
+                    old_view = state.new_view,
+                    new_view = view_change.new_view,
+                    "Switching to higher view change"
+                );
                 state.new_view = view_change.new_view;
                 state.view_changes.clear();
                 state.started_at = chrono::Utc::now().timestamp_millis();
             } else {
+                // Lower view - ignore stale view change
+                warn!(
+                    received_view = view_change.new_view,
+                    current_view = state.new_view,
+                    "Ignoring stale view change for lower view"
+                );
                 return Ok(None);
             }
         }
@@ -1003,6 +1028,40 @@ impl ConsensusEngine {
                 needed: quorum,
                 have: new_view.view_changes.len(),
             });
+        }
+
+        // Verify each ViewChangeMessage signature AND that they're all for the announced view
+        for vc in &new_view.view_changes {
+            // CRITICAL: Verify ViewChange is for the announced view
+            if vc.new_view != new_view.view {
+                return Err(ConsensusError::ViewMismatch {
+                    expected: new_view.view,
+                    actual: vc.new_view,
+                });
+            }
+
+            #[derive(Serialize)]
+            struct ViewChangeSigningData {
+                new_view: ViewNumber,
+                last_prepared_sequence: Option<SequenceNumber>,
+            }
+
+            let signing_data = ViewChangeSigningData {
+                new_view: vc.new_view,
+                last_prepared_sequence: vc.last_prepared_sequence,
+            };
+
+            let signing_bytes = bincode::serialize(&signing_data)
+                .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+            let is_valid_sig = self
+                .validator_set
+                .verify_signature(&vc.validator, &signing_bytes, &vc.signature)
+                .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+            if !is_valid_sig {
+                return Err(ConsensusError::InvalidSignature(vc.validator.to_hex()));
+            }
         }
 
         // Transition to new view
