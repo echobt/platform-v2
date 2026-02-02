@@ -273,8 +273,7 @@ async fn route_to_validators(
     }
 
     // Broadcast the event - validators will receive it if they're in the target list
-    // Note: This broadcasts to ALL, but validators filter client-side by their hotkey
-    // For true targeted delivery, we'd need per-connection channels (see TODO below)
+    // Note: This broadcasts to ALL validators, who filter client-side by their hotkey
     if delivered > 0 {
         state.broadcaster.broadcast(ws_event);
     }
@@ -328,26 +327,6 @@ async fn broadcast_to_all_validators(
 
     validator_count
 }
-
-// =============================================================================
-// TODO: True per-connection targeted delivery
-// =============================================================================
-//
-// The current implementation broadcasts to all and relies on validators
-// filtering by their hotkey. For true targeted delivery with lower bandwidth:
-//
-// 1. Add per-connection mpsc channels in EventBroadcaster:
-//    pub sender_channels: DashMap<Uuid, mpsc::Sender<String>>,
-//
-// 2. Register channel when connection is established:
-//    broadcaster.register_sender(conn_id, tx);
-//
-// 3. In route_to_validators(), send directly to target connections:
-//    if let Some(conn_id) = get_conn_id_by_hotkey(hotkey) {
-//        broadcaster.send_to_connection(&conn_id, &message).await;
-//    }
-//
-// This would require changes to the validator's handle_socket() as well.
 
 #[cfg(test)]
 mod tests {
