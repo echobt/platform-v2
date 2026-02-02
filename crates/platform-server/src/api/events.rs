@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Shared secret for challenge event broadcasts (set via BROADCAST_SECRET env var)
 /// Challenges must include this in X-Broadcast-Secret header
@@ -37,25 +37,57 @@ pub struct BroadcastEventResponse {
     pub error: Option<String>,
 }
 
+/// Constant-time comparison to prevent timing attacks
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// POST /api/v1/events/broadcast - Broadcast a custom challenge event
 ///
 /// Called by challenge containers to notify validators of events.
 /// Validators filter events by challenge_id to receive only relevant ones.
 ///
 /// Requires X-Broadcast-Secret header matching BROADCAST_SECRET env var.
+/// If BROADCAST_SECRET is not set, rejects requests unless DISABLE_BROADCAST_AUTH is set.
 pub async fn broadcast_event(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<BroadcastEventRequest>,
 ) -> Result<Json<BroadcastEventResponse>, (StatusCode, String)> {
-    // Verify broadcast secret
-    if let Some(expected_secret) = get_broadcast_secret() {
+    // Get broadcast secret - REQUIRED unless explicitly disabled
+    let expected_secret = match get_broadcast_secret() {
+        Some(secret) if !secret.is_empty() => secret,
+        _ => {
+            // Check if auth is explicitly disabled (for local development only)
+            if std::env::var("DISABLE_BROADCAST_AUTH").is_ok() {
+                warn!("SECURITY: Broadcast authentication disabled - only use in development!");
+                String::new() // Empty string means skip check
+            } else {
+                error!("BROADCAST_SECRET not set - rejecting broadcast request");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Server misconfigured: BROADCAST_SECRET not set".into(),
+                ));
+            }
+        }
+    };
+
+    // Verify secret if required
+    if !expected_secret.is_empty() {
         let provided_secret = headers
             .get("X-Broadcast-Secret")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        if provided_secret != expected_secret {
+        // Use constant-time comparison to prevent timing attacks
+        if !constant_time_eq(provided_secret.as_bytes(), expected_secret.as_bytes()) {
             warn!(
                 "Unauthorized broadcast attempt for challenge: {}",
                 req.challenge_id
@@ -63,6 +95,7 @@ pub async fn broadcast_event(
             return Err((StatusCode::UNAUTHORIZED, "Invalid broadcast secret".into()));
         }
     }
+
     // Create the custom event
     let event = ChallengeCustomEvent {
         challenge_id: req.challenge_id.clone(),

@@ -39,7 +39,7 @@ use axum::{
 };
 use clap::Parser;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
@@ -82,6 +82,46 @@ struct Args {
     /// Subnet UID for metagraph sync
     #[arg(long, env = "NETUID", default_value = "100")]
     netuid: u16,
+}
+
+/// Build CORS layer based on environment configuration.
+///
+/// In development mode (DEVELOPMENT_MODE env var set or CORS_ALLOWED_ORIGINS="*"),
+/// allows any origin. In production, only whitelisted origins are allowed.
+fn build_cors_layer() -> CorsLayer {
+    let allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "https://platform.network,https://chain.platform.network".to_string());
+
+    if allowed_origins == "*" || std::env::var("DEVELOPMENT_MODE").is_ok() {
+        // Only allow Any in explicit development mode
+        tracing::warn!("CORS allowing all origins - this should only be used in development!");
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any)
+    } else {
+        // Production: whitelist specific origins
+        let origins: Vec<axum::http::HeaderValue> = allowed_origins
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+            ])
+            .allow_credentials(true)
+    }
 }
 
 #[tokio::main]
@@ -317,12 +357,7 @@ async fn main() -> anyhow::Result<()> {
             post(api::events::broadcast_event),
         )
         .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(build_cors_layer())
         .with_state(state);
 
     let addr = format!("{}:{}", args.host, args.port);
