@@ -6,6 +6,49 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Canonicalizes a JSON value to a deterministic string representation.
+///
+/// This ensures that JSON objects with the same key-value pairs but different
+/// insertion orders produce identical strings. Keys in objects are sorted
+/// lexicographically, and the process is applied recursively to nested values.
+///
+/// # Examples
+///
+/// ```
+/// use serde_json::json;
+///
+/// // These two values have the same content but were created with different key orders
+/// let v1 = json!({"b": 2, "a": 1});
+/// let v2 = json!({"a": 1, "b": 2});
+///
+/// // canonicalize_json produces the same output for both
+/// // (keys are sorted: "a" comes before "b")
+/// ```
+fn canonicalize_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<_> = map.iter().collect();
+            pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+            let inner: Vec<String> = pairs
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k)),
+                        canonicalize_json(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        serde_json::Value::Array(arr) => {
+            let inner: Vec<String> = arr.iter().map(canonicalize_json).collect();
+            format!("[{}]", inner.join(","))
+        }
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+    }
+}
+
 /// A stored submission from a miner
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSubmission {
@@ -53,14 +96,14 @@ impl StoredSubmission {
         let challenge_id = challenge_id.into();
         let miner_hotkey = miner_hotkey.into();
 
-        // Compute submission hash
+        // Compute submission hash using canonicalized JSON for deterministic hashing
         let mut hasher = Sha256::new();
         hasher.update(challenge_id.as_bytes());
         hasher.update(miner_hotkey.as_bytes());
         if let Some(ref code) = source_code {
             hasher.update(code.as_bytes());
         }
-        hasher.update(metadata.to_string().as_bytes());
+        hasher.update(canonicalize_json(&metadata).as_bytes());
         let submission_hash = hex::encode(hasher.finalize());
 
         Self {
@@ -550,5 +593,89 @@ mod tests {
 
         assert!(agg.has_quorum(2));
         assert!(!agg.has_quorum(3));
+    }
+
+    #[test]
+    fn test_canonicalize_json_simple() {
+        use crate::submission::canonicalize_json;
+
+        // Test that object key order doesn't affect output
+        let json1 = serde_json::json!({"a": 1, "b": 2});
+        let json2 = serde_json::json!({"b": 2, "a": 1});
+
+        assert_eq!(canonicalize_json(&json1), canonicalize_json(&json2));
+        assert_eq!(canonicalize_json(&json1), r#"{"a":1,"b":2}"#);
+    }
+
+    #[test]
+    fn test_canonicalize_json_nested() {
+        use crate::submission::canonicalize_json;
+
+        // Test nested objects with different key orders
+        let json1 = serde_json::json!({
+            "outer_b": {"inner_z": 1, "inner_a": 2},
+            "outer_a": [3, 4]
+        });
+        let json2 = serde_json::json!({
+            "outer_a": [3, 4],
+            "outer_b": {"inner_a": 2, "inner_z": 1}
+        });
+
+        assert_eq!(canonicalize_json(&json1), canonicalize_json(&json2));
+    }
+
+    #[test]
+    fn test_canonicalize_json_all_types() {
+        use crate::submission::canonicalize_json;
+
+        // Test all JSON value types
+        assert_eq!(canonicalize_json(&serde_json::Value::Null), "null");
+        assert_eq!(canonicalize_json(&serde_json::json!(true)), "true");
+        assert_eq!(canonicalize_json(&serde_json::json!(false)), "false");
+        assert_eq!(canonicalize_json(&serde_json::json!(42)), "42");
+        assert_eq!(canonicalize_json(&serde_json::json!(3.14)), "3.14");
+        assert_eq!(canonicalize_json(&serde_json::json!("hello")), r#""hello""#);
+        assert_eq!(canonicalize_json(&serde_json::json!([1, 2, 3])), "[1,2,3]");
+    }
+
+    #[test]
+    fn test_submission_hash_deterministic() {
+        // Create two submissions with the same data but different JSON key insertion order
+        // This tests that the submission hash is deterministic regardless of key order
+
+        // Create metadata with keys in one order
+        let mut map1 = serde_json::Map::new();
+        map1.insert("zebra".to_string(), serde_json::json!("value_z"));
+        map1.insert("alpha".to_string(), serde_json::json!("value_a"));
+        map1.insert("middle".to_string(), serde_json::json!({"nested_b": 2, "nested_a": 1}));
+        let metadata1 = serde_json::Value::Object(map1);
+
+        // Create metadata with keys in different order
+        let mut map2 = serde_json::Map::new();
+        map2.insert("alpha".to_string(), serde_json::json!("value_a"));
+        map2.insert("middle".to_string(), serde_json::json!({"nested_a": 1, "nested_b": 2}));
+        map2.insert("zebra".to_string(), serde_json::json!("value_z"));
+        let metadata2 = serde_json::Value::Object(map2);
+
+        // Create submissions with the same logical metadata but different insertion orders
+        let submission1 = StoredSubmission::new(
+            "challenge_test",
+            "miner_hotkey_test",
+            Some("print('test')".to_string()),
+            metadata1,
+        );
+
+        let submission2 = StoredSubmission::new(
+            "challenge_test",
+            "miner_hotkey_test",
+            Some("print('test')".to_string()),
+            metadata2,
+        );
+
+        // Both submissions should have the same hash
+        assert_eq!(
+            submission1.submission_hash, submission2.submission_hash,
+            "Submission hashes should be identical for semantically equivalent metadata"
+        );
     }
 }
