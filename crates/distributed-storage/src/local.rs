@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sled::{Db, Tree};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate::error::{StorageError, StorageResult};
@@ -65,8 +66,8 @@ struct LocalEntry {
 
 /// Local storage implementation using sled
 pub struct LocalStorage {
-    /// The underlying sled database
-    db: Db,
+    /// The underlying sled database (wrapped in Arc for spawn_blocking)
+    db: Arc<Db>,
     /// Tree for storing key-value data
     data_tree: Tree,
     /// Tree for storing namespace indexes
@@ -85,7 +86,7 @@ impl LocalStorage {
         let index_tree = db.open_tree("index")?;
 
         let storage = Self {
-            db,
+            db: Arc::new(db),
             data_tree,
             index_tree,
             node_id,
@@ -105,7 +106,7 @@ impl LocalStorage {
         let index_tree = db.open_tree("index")?;
 
         Ok(Self {
-            db,
+            db: Arc::new(db),
             data_tree,
             index_tree,
             node_id,
@@ -197,11 +198,11 @@ impl LocalStorage {
     }
 
     /// Mark that this value has been replicated to a node
-    pub fn mark_replicated(&self, key: &StorageKey, node_id: &str) -> StorageResult<()> {
+    pub async fn mark_replicated(&self, key: &StorageKey, node_id: &str) -> StorageResult<()> {
         if let Some(mut entry) = self.get_entry(key)? {
             entry.replication.mark_replicated(node_id);
             self.put_entry(key, &entry)?;
-            self.db.flush()?;
+            self.flush_async().await?;
         }
         Ok(())
     }
@@ -237,9 +238,19 @@ impl LocalStorage {
         Ok(self.get_entry(key)?.map(|e| e.replication))
     }
 
-    /// Flush all changes to disk
+    /// Flush all changes to disk synchronously (blocking)
     pub fn flush(&self) -> StorageResult<()> {
         self.db.flush()?;
+        Ok(())
+    }
+
+    /// Flush all changes to disk asynchronously using spawn_blocking
+    pub async fn flush_async(&self) -> StorageResult<()> {
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || db.flush())
+            .await
+            .map_err(|e| StorageError::Database(format!("flush task panicked: {}", e)))?
+            .map_err(StorageError::from)?;
         Ok(())
     }
 
@@ -330,7 +341,7 @@ impl DistributedStore for LocalStorage {
         };
 
         self.put_entry(&key, &entry)?;
-        self.db.flush()?;
+        self.flush_async().await?;
 
         debug!(
             "LocalStorage::put completed key={} version={}",
@@ -343,7 +354,7 @@ impl DistributedStore for LocalStorage {
     async fn delete(&self, key: &StorageKey) -> StorageResult<bool> {
         trace!("LocalStorage::delete key={}", key);
         let deleted = self.delete_entry(key)?;
-        self.db.flush()?;
+        self.flush_async().await?;
         Ok(deleted)
     }
 
@@ -735,6 +746,7 @@ mod tests {
         // Mark as replicated
         storage
             .mark_replicated(&key, "node2")
+            .await
             .expect("mark replicated failed");
 
         let info = storage
