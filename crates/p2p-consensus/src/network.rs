@@ -14,7 +14,7 @@ use libp2p::{
 };
 use parking_lot::RwLock;
 use platform_core::{Hotkey, Keypair};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -144,6 +144,12 @@ impl Default for PeerMapping {
 /// Default rate limit: maximum messages per second per signer
 const DEFAULT_RATE_LIMIT: u32 = 100;
 
+/// Rate limit sliding window in milliseconds (1 second)
+const RATE_LIMIT_WINDOW_MS: i64 = 1000;
+
+/// Nonce expiry time in milliseconds (5 minutes)
+const NONCE_EXPIRY_MS: i64 = 5 * 60 * 1000;
+
 /// P2P network node
 pub struct P2PNetwork {
     /// Local keypair
@@ -165,10 +171,11 @@ pub struct P2PNetwork {
     event_tx: mpsc::Sender<NetworkEvent>,
     /// Message nonce counter
     nonce: RwLock<u64>,
-    /// Seen nonces for replay protection (hotkey -> set of seen nonces)
-    seen_nonces: RwLock<HashMap<Hotkey, HashSet<u64>>>,
-    /// Message counts for rate limiting (hotkey -> (window_start_timestamp, count))
-    message_counts: RwLock<HashMap<Hotkey, (i64, u32)>>,
+    /// Seen nonces for replay protection with timestamps (hotkey -> (nonce -> timestamp_ms))
+    /// Timestamps allow automatic expiry of old nonces
+    seen_nonces: RwLock<HashMap<Hotkey, HashMap<u64, i64>>>,
+    /// Message timestamps for sliding window rate limiting (hotkey -> recent message timestamps in ms)
+    message_timestamps: RwLock<HashMap<Hotkey, VecDeque<i64>>>,
 }
 
 impl P2PNetwork {
@@ -199,7 +206,7 @@ impl P2PNetwork {
             event_tx,
             nonce: RwLock::new(0),
             seen_nonces: RwLock::new(HashMap::new()),
-            message_counts: RwLock::new(HashMap::new()),
+            message_timestamps: RwLock::new(HashMap::new()),
         })
     }
 
@@ -438,43 +445,58 @@ impl P2PNetwork {
     }
 
     /// Check if a nonce has been seen before (replay attack detection)
+    ///
+    /// Uses timestamp-based expiry to automatically clean old nonces and bound memory usage.
+    /// Nonces older than NONCE_EXPIRY_MS (5 minutes) are automatically removed.
     fn check_replay(&self, signer: &Hotkey, nonce: u64) -> Result<(), NetworkError> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let mut seen_nonces = self.seen_nonces.write();
         let nonces = seen_nonces.entry(signer.clone()).or_default();
 
-        if nonces.contains(&nonce) {
+        // Auto-expire old nonces to bound memory usage
+        nonces.retain(|_, timestamp| now_ms - *timestamp < NONCE_EXPIRY_MS);
+
+        // Check if this nonce was already seen (and not expired)
+        if nonces.contains_key(&nonce) {
             return Err(NetworkError::ReplayAttack {
                 signer: signer.to_hex(),
                 nonce,
             });
         }
 
-        nonces.insert(nonce);
+        // Record this nonce with current timestamp
+        nonces.insert(nonce, now_ms);
         Ok(())
     }
 
-    /// Check and update rate limit for a signer
+    /// Check and update rate limit for a signer using sliding window
+    ///
+    /// Uses a sliding window approach to prevent burst attacks at window boundaries.
+    /// Tracks individual message timestamps and counts messages within the window.
     fn check_rate_limit(&self, signer: &Hotkey) -> Result<(), NetworkError> {
-        let now = chrono::Utc::now().timestamp();
-        let mut counts = self.message_counts.write();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut timestamps = self.message_timestamps.write();
+        let queue = timestamps.entry(signer.clone()).or_default();
 
-        let (window_start, count) = counts.entry(signer.clone()).or_insert((now, 0));
-
-        // Reset window if more than 1 second has passed
-        if now - *window_start >= 1 {
-            *window_start = now;
-            *count = 0;
+        // Remove timestamps older than the sliding window
+        while let Some(&front) = queue.front() {
+            if now_ms - front > RATE_LIMIT_WINDOW_MS {
+                queue.pop_front();
+            } else {
+                break;
+            }
         }
 
-        *count += 1;
-
-        if *count > DEFAULT_RATE_LIMIT {
+        // Check if over limit (>= because we're about to add one more)
+        if queue.len() >= DEFAULT_RATE_LIMIT as usize {
             return Err(NetworkError::RateLimitExceeded {
                 signer: signer.to_hex(),
-                count: *count,
+                count: queue.len() as u32,
             });
         }
 
+        // Add current timestamp
+        queue.push_back(now_ms);
         Ok(())
     }
 
@@ -483,26 +505,21 @@ impl P2PNetwork {
     /// This should be called periodically (e.g., every minute) to remove
     /// old nonces that are no longer relevant for replay protection.
     /// The `max_age_secs` parameter determines how long to keep nonces.
-    pub fn clean_old_nonces(&self, _max_age_secs: u64) {
-        // Simple implementation: clear all nonces older than max_age
-        // In practice, we'd need to track timestamps per nonce, but since
-        // nonces are monotonically increasing, we can use a simpler approach:
-        // Keep only the highest N nonces per signer.
-        const MAX_NONCES_PER_SIGNER: usize = 10_000;
-
+    ///
+    /// Note: Nonces are also automatically cleaned during `check_replay()` calls,
+    /// but this method provides bulk cleanup for signers who have stopped sending messages.
+    pub fn clean_old_nonces(&self, max_age_secs: u64) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let max_age_ms = (max_age_secs * 1000) as i64;
         let mut seen_nonces = self.seen_nonces.write();
 
+        // Clean expired nonces for each signer
         for nonces in seen_nonces.values_mut() {
-            if nonces.len() > MAX_NONCES_PER_SIGNER {
-                // Keep only the highest nonces (most recent)
-                let mut sorted: Vec<u64> = nonces.iter().copied().collect();
-                sorted.sort_unstable();
-                let cutoff = sorted.len() - MAX_NONCES_PER_SIGNER;
-                for nonce in &sorted[..cutoff] {
-                    nonces.remove(nonce);
-                }
-            }
+            nonces.retain(|_, timestamp| now_ms - *timestamp < max_age_ms);
         }
+
+        // Remove signers with no remaining nonces
+        seen_nonces.retain(|_, nonces| !nonces.is_empty());
 
         debug!("Cleaned old nonces, current signer count: {}", seen_nonces.len());
     }
@@ -510,12 +527,24 @@ impl P2PNetwork {
     /// Clean stale rate limit entries
     ///
     /// Should be called periodically to remove old rate limit tracking entries.
+    /// Removes signers who haven't sent messages within the rate limit window.
     pub fn clean_rate_limit_entries(&self) {
-        let now = chrono::Utc::now().timestamp();
-        let mut counts = self.message_counts.write();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut timestamps = self.message_timestamps.write();
 
-        // Remove entries where the window started more than 60 seconds ago
-        counts.retain(|_, (window_start, _)| now - *window_start < 60);
+        // Clean old timestamps for each signer
+        for queue in timestamps.values_mut() {
+            while let Some(&front) = queue.front() {
+                if now_ms - front > RATE_LIMIT_WINDOW_MS {
+                    queue.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Remove signers with no recent messages
+        timestamps.retain(|_, queue| !queue.is_empty());
     }
 
     /// Start listening on configured addresses
