@@ -1425,9 +1425,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_default_policy_allows_images() {
-        // Default policy allows all images
+    async fn test_default_policy_restricts_images() {
+        // Default policy now restricts to platform images only
         let policy = SecurityPolicy::default();
+
+        // Non-platform images should be blocked
+        let config = ContainerConfig {
+            image: "any/image:latest".to_string(),
+            challenge_id: "test".to_string(),
+            owner_id: "test".to_string(),
+            ..Default::default()
+        };
+        assert!(policy.validate(&config).is_err());
+
+        // Platform images should be allowed
+        let config = ContainerConfig {
+            image: "ghcr.io/platformnetwork/test:latest".to_string(),
+            challenge_id: "test".to_string(),
+            owner_id: "test".to_string(),
+            ..Default::default()
+        };
+        assert!(policy.validate(&config).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_permissive_policy_allows_all_images() {
+        // Permissive policy allows all images (for dev/testing)
+        let policy = SecurityPolicy::permissive();
 
         let config = ContainerConfig {
             image: "any/image:latest".to_string(),

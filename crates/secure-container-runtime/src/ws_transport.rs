@@ -20,8 +20,12 @@ use tracing::{debug, error, info, warn};
 pub struct WsConfig {
     /// Address to bind (e.g., "0.0.0.0:8090")
     pub bind_addr: String,
-    /// JWT secret for authentication (if None, auth disabled)
+    /// JWT secret for authentication (REQUIRED in production)
+    /// If None and allow_unauthenticated is false, connections will be rejected
     pub jwt_secret: Option<String>,
+    /// Explicitly allow unauthenticated connections (USE WITH CAUTION - dev/testing only)
+    /// This must be explicitly set to true to allow connections without JWT validation
+    pub allow_unauthenticated: bool,
     /// Allowed challenge IDs (if empty, all allowed)
     pub allowed_challenges: Vec<String>,
     /// Max connections per challenge
@@ -33,9 +37,27 @@ impl Default for WsConfig {
         Self {
             bind_addr: "0.0.0.0:8090".to_string(),
             jwt_secret: std::env::var("BROKER_JWT_SECRET").ok(),
+            // SECURITY: Default to requiring authentication
+            allow_unauthenticated: false,
             allowed_challenges: vec![],
             max_connections_per_challenge: 10,
         }
+    }
+}
+
+impl WsConfig {
+    /// Create a development config that allows unauthenticated connections
+    /// WARNING: This should NEVER be used in production!
+    pub fn development() -> Self {
+        Self {
+            allow_unauthenticated: true,
+            ..Default::default()
+        }
+    }
+
+    /// Check if authentication is required
+    pub fn requires_auth(&self) -> bool {
+        !self.allow_unauthenticated
     }
 }
 
@@ -115,7 +137,22 @@ async fn handle_ws_connection(
         authenticated: false,
     };
 
-    // Always wait for auth message (even if we don't validate JWT)
+    // SECURITY: Check if authentication is required but not configured
+    if config.requires_auth() && config.jwt_secret.is_none() {
+        warn!(addr = %addr, "SECURITY: Rejecting connection - JWT secret not configured but authentication is required");
+        let err_response = Response::Error {
+            error: ContainerError::Unauthorized(
+                "Authentication required but JWT secret not configured. Set BROKER_JWT_SECRET or explicitly enable unauthenticated access.".to_string()
+            ),
+            request_id: "auth".to_string(),
+        };
+        write
+            .send(Message::Text(encode_response(&err_response)))
+            .await?;
+        return Ok(());
+    }
+
+    // Always wait for auth message
     let auth_timeout = tokio::time::Duration::from_secs(10);
     match tokio::time::timeout(auth_timeout, read.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => {
@@ -170,9 +207,15 @@ async fn handle_ws_connection(
                         return Ok(());
                     }
                 }
-            } else {
-                // No JWT validation - try to parse auth message to get challenge_id
-                // but don't fail if it's invalid
+            } else if config.allow_unauthenticated {
+                // SECURITY WARNING: Unauthenticated access explicitly allowed
+                // This should only be used in development/testing environments
+                warn!(
+                    addr = %addr,
+                    "SECURITY WARNING: Accepting unauthenticated connection (allow_unauthenticated=true)"
+                );
+
+                // Try to parse auth message to get challenge_id for tracking purposes
                 if let Ok(auth_msg) = serde_json::from_str::<AuthMessage>(&text) {
                     // Try to decode JWT without validation to get challenge_id
                     if let Ok(claims) = decode_jwt_unverified(&auth_msg.token) {
@@ -185,15 +228,27 @@ async fn handle_ws_connection(
                 info!(
                     addr = %addr,
                     challenge_id = %conn_state.challenge_id,
-                    "WebSocket connected (no auth required)"
+                    "WebSocket connected (unauthenticated - dev mode)"
                 );
 
                 // Send success response
                 let success = Response::Pong {
-                    version: "authenticated".to_string(),
+                    version: "unauthenticated".to_string(),
                     request_id: "auth".to_string(),
                 };
                 write.send(Message::Text(encode_response(&success))).await?;
+            } else {
+                // SECURITY: This branch should not be reached due to the check at the start,
+                // but keep it as a safety net
+                warn!(addr = %addr, "SECURITY: Rejecting unauthenticated connection");
+                let err_response = Response::Error {
+                    error: ContainerError::Unauthorized("Authentication required".to_string()),
+                    request_id: "auth".to_string(),
+                };
+                write
+                    .send(Message::Text(encode_response(&err_response)))
+                    .await?;
+                return Ok(());
             }
         }
         _ => {
@@ -378,6 +433,17 @@ mod tests {
         assert_eq!(config.bind_addr, "0.0.0.0:8090");
         assert_eq!(config.max_connections_per_challenge, 10);
         assert_eq!(config.allowed_challenges.len(), 0);
+        // SECURITY: Default should require authentication
+        assert!(!config.allow_unauthenticated);
+        assert!(config.requires_auth());
+    }
+
+    #[test]
+    fn test_ws_config_development() {
+        let config = WsConfig::development();
+        // Development mode explicitly allows unauthenticated access
+        assert!(config.allow_unauthenticated);
+        assert!(!config.requires_auth());
     }
 
     #[test]
@@ -421,12 +487,14 @@ mod tests {
         let config = WsConfig {
             bind_addr: "127.0.0.1:9000".into(),
             jwt_secret: Some("my-secret".into()),
+            allow_unauthenticated: false,
             allowed_challenges: vec!["ch1".into(), "ch2".into()],
             max_connections_per_challenge: 5,
         };
 
         assert_eq!(config.bind_addr, "127.0.0.1:9000");
         assert_eq!(config.jwt_secret, Some("my-secret".into()));
+        assert!(!config.allow_unauthenticated);
         assert_eq!(config.allowed_challenges.len(), 2);
         assert_eq!(config.max_connections_per_challenge, 5);
     }

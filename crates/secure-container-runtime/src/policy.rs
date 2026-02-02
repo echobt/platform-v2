@@ -56,9 +56,12 @@ impl Default for SecurityPolicy {
         forbidden.insert("/dev".to_string());
 
         Self {
-            // Empty = allow all images (challenges can use any public image)
-            // For strict mode, populate this with allowed prefixes
-            allowed_image_prefixes: vec![],
+            // SECURITY: Default to Platform images only to prevent supply chain attacks
+            // Use permissive() for development/testing if all images need to be allowed
+            allowed_image_prefixes: vec![
+                "ghcr.io/platformnetwork/".to_string(),
+                "platform-".to_string(), // Local builds
+            ],
             max_memory_bytes: 8 * 1024 * 1024 * 1024, // 8GB
             max_cpu_cores: 4.0,
             max_pids: 512,
@@ -85,6 +88,15 @@ impl SecurityPolicy {
             allowed_image_prefixes: vec!["ghcr.io/platformnetwork/".to_string()],
             ..Default::default()
         }
+    }
+
+    /// Create a permissive policy that allows all images (USE WITH CAUTION)
+    /// This should only be used in development/testing environments.
+    /// In production, use default() or strict() with explicit image whitelisting.
+    pub fn permissive() -> Self {
+        let mut policy = Self::default();
+        policy.allowed_image_prefixes.clear();
+        policy
     }
 
     /// Create a more permissive policy for development
@@ -195,11 +207,39 @@ impl SecurityPolicy {
     /// Validate mount configurations
     pub fn validate_mounts(&self, mounts: &[MountConfig]) -> Result<(), ContainerError> {
         for mount in mounts {
-            // Check for forbidden paths
+            // SECURITY: Check for path traversal attempts (../)
+            if mount.source.contains("..") {
+                warn!(source = %mount.source, "SECURITY: Blocked path traversal attempt");
+                return Err(ContainerError::PolicyViolation(format!(
+                    "Path traversal not allowed: {}",
+                    mount.source
+                )));
+            }
+
+            // Normalize the path for security checks to prevent bypass attacks
+            let source_path = std::path::Path::new(&mount.source);
+            let normalized =
+                source_path
+                    .components()
+                    .fold(std::path::PathBuf::new(), |mut acc, comp| {
+                        match comp {
+                            std::path::Component::ParentDir => {
+                                acc.pop();
+                            }
+                            std::path::Component::Normal(s) => acc.push(s),
+                            std::path::Component::RootDir => acc.push("/"),
+                            _ => {}
+                        }
+                        acc
+                    });
+            let normalized_str = normalized.to_string_lossy();
+
+            // Check for forbidden paths using normalized path
             for forbidden in &self.forbidden_mount_paths {
-                if mount.source.starts_with(forbidden) || mount.source == *forbidden {
+                if normalized_str.starts_with(forbidden) || normalized_str == *forbidden {
                     warn!(
                         source = %mount.source,
+                        normalized = %normalized_str,
                         "SECURITY: Blocked forbidden mount path"
                     );
                     return Err(ContainerError::PolicyViolation(format!(
@@ -209,19 +249,21 @@ impl SecurityPolicy {
                 }
             }
 
-            // Special check for Docker socket
-            if mount.source.contains("docker.sock") && !self.allow_docker_socket {
+            // Special check for Docker socket (check both original and normalized)
+            if (mount.source.contains("docker.sock") || normalized_str.contains("docker.sock"))
+                && !self.allow_docker_socket
+            {
                 warn!("SECURITY: Blocked Docker socket mount attempt");
                 return Err(ContainerError::PolicyViolation(
                     "Docker socket mounting is not allowed".to_string(),
                 ));
             }
 
-            // Check source is in allowed prefixes
+            // Check source is in allowed prefixes using normalized path
             let allowed = self
                 .allowed_mount_prefixes
                 .iter()
-                .any(|prefix| mount.source.starts_with(prefix));
+                .any(|prefix| normalized_str.starts_with(prefix));
 
             if !allowed && !mounts.is_empty() {
                 return Err(ContainerError::PolicyViolation(format!(
@@ -299,6 +341,14 @@ mod tests {
         assert!(!policy.allow_privileged);
         assert!(!policy.allow_docker_socket);
         assert!(!policy.allow_host_network);
+        // SECURITY: Default policy should have image whitelisting enabled
+        assert!(!policy.allowed_image_prefixes.is_empty());
+        assert!(policy
+            .allowed_image_prefixes
+            .contains(&"ghcr.io/platformnetwork/".to_string()));
+        assert!(policy
+            .allowed_image_prefixes
+            .contains(&"platform-".to_string()));
     }
 
     #[test]
@@ -307,12 +357,14 @@ mod tests {
         assert!(policy
             .validate_image("ghcr.io/platformnetwork/term-challenge:latest")
             .is_ok());
+        // Local platform builds should also be allowed
+        assert!(policy.validate_image("platform-challenge:latest").is_ok());
     }
 
     #[test]
     fn test_validate_image_blocked() {
-        // Use strict() policy which has whitelist enabled
-        let policy = SecurityPolicy::strict();
+        // Default policy now has whitelist enabled
+        let policy = SecurityPolicy::default();
         assert!(policy
             .validate_image("docker.io/malicious/image:latest")
             .is_err());
@@ -320,9 +372,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_allows_all_images() {
-        // Default policy has no whitelist, allows all images
-        let policy = SecurityPolicy::default();
+    fn test_permissive_allows_all_images() {
+        // Permissive policy has no whitelist, allows all images
+        let policy = SecurityPolicy::permissive();
+        assert!(policy.allowed_image_prefixes.is_empty());
         assert!(policy.validate_image("docker.io/any/image:latest").is_ok());
         assert!(policy.validate_image("alpine:latest").is_ok());
         assert!(policy
@@ -432,7 +485,7 @@ mod tests {
     fn test_validate_missing_owner_id() {
         let policy = SecurityPolicy::default();
         let config = ContainerConfig {
-            image: "test:latest".to_string(),
+            image: "ghcr.io/platformnetwork/test:latest".to_string(),
             challenge_id: "challenge-1".to_string(),
             owner_id: "".to_string(),
             ..Default::default()
@@ -549,6 +602,40 @@ mod tests {
     fn test_validate_mounts_empty_list() {
         let policy = SecurityPolicy::default();
         assert!(policy.validate_mounts(&vec![]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_mounts_path_traversal() {
+        let policy = SecurityPolicy::default();
+
+        // Test various path traversal attempts
+        let traversal_attempts = vec![
+            "/tmp/../etc/passwd",
+            "/tmp/data/../../../etc/shadow",
+            "/var/lib/platform/../../../root/.ssh",
+            "/tmp/safe/../../unsafe",
+        ];
+
+        for path in traversal_attempts {
+            let mounts = vec![MountConfig {
+                source: path.to_string(),
+                target: "/mnt/test".to_string(),
+                read_only: true,
+            }];
+            assert!(
+                policy.validate_mounts(&mounts).is_err(),
+                "Should block path traversal: {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_permissive_policy() {
+        let policy = SecurityPolicy::permissive();
+        // Permissive policy should allow any image
+        assert!(policy.allowed_image_prefixes.is_empty());
+        assert!(policy.validate_image("any/random:image").is_ok());
     }
 
     #[test]

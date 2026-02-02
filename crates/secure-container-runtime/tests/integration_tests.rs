@@ -74,9 +74,9 @@ fn test_strict_policy_blocks_non_whitelisted_images() {
 }
 
 #[test]
-fn test_default_policy_allows_all_images() {
-    // Default policy has empty whitelist = allow all
-    let policy = SecurityPolicy::default();
+fn test_permissive_policy_allows_all_images() {
+    // Permissive policy has empty whitelist = allow all
+    let policy = SecurityPolicy::permissive();
 
     let images = vec![
         "alpine:latest",
@@ -88,6 +88,35 @@ fn test_default_policy_allows_all_images() {
     for image in images {
         let result = policy.validate_image(image);
         assert!(result.is_ok(), "Image should be allowed: {}", image);
+    }
+}
+
+#[test]
+fn test_default_policy_allows_whitelisted_images() {
+    // Default policy only allows Platform images
+    let policy = SecurityPolicy::default();
+
+    // Platform images should be allowed
+    let allowed_images = vec![
+        "ghcr.io/platformnetwork/term-challenge:latest",
+        "platform-compiler:latest",
+    ];
+
+    for image in allowed_images {
+        let result = policy.validate_image(image);
+        assert!(result.is_ok(), "Image should be allowed: {}", image);
+    }
+
+    // Non-Platform images should be blocked
+    let blocked_images = vec![
+        "alpine:latest",
+        "ubuntu:22.04",
+        "alexgshaw/code-from-image:20251031",
+    ];
+
+    for image in blocked_images {
+        let result = policy.validate_image(image);
+        assert!(result.is_err(), "Image should be blocked: {}", image);
     }
 }
 
