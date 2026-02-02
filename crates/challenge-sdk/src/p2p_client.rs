@@ -869,7 +869,10 @@ mod tests {
         {
             assert_eq!(challenge_id, "test-challenge");
             assert_eq!(deser_submission.submission_hash, "store-hash-123");
-            assert_eq!(deser_submission.source_code, "fn main() { println!(\"hello\"); }");
+            assert_eq!(
+                deser_submission.source_code,
+                "fn main() { println!(\"hello\"); }"
+            );
         } else {
             panic!("Wrong message type after deserialization");
         }
@@ -1003,8 +1006,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&msg).expect("Should serialize");
-        let deser: P2PChallengeMessage =
-            serde_json::from_str(&json).expect("Should deserialize");
+        let deser: P2PChallengeMessage = serde_json::from_str(&json).expect("Should deserialize");
 
         if let P2PChallengeMessage::EvaluationStatusResponse {
             consensus_reached,
