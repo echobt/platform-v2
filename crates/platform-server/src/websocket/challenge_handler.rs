@@ -191,7 +191,9 @@ async fn handle_challenge_socket(
                             message: format!("Invalid message format: {}", e),
                         };
                         let error_json = serde_json::to_string(&error).unwrap_or_default();
-                        let _ = sender.send(Message::Text(error_json)).await;
+                        if let Err(e) = sender.send(Message::Text(error_json)).await {
+                            warn!("Failed to send error message to challenge '{}': {}", challenge_id, e);
+                        }
                     }
                 }
             }

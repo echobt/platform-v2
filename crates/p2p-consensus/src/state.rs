@@ -312,31 +312,27 @@ impl ChainState {
 
     /// Finalize an evaluation (compute aggregated score)
     ///
-    /// Uses verified stakes from the validators map when available,
-    /// falling back to self-reported stake only if validator not found.
+    /// Only uses verified stakes from the validators map. Evaluations from
+    /// unknown validators are skipped entirely to prevent stake inflation attacks.
     pub fn finalize_evaluation(&mut self, submission_id: &str) -> Result<f64, StateError> {
         if let Some(record) = self.pending_evaluations.get_mut(submission_id) {
-            // Stake-weighted average using verified stakes where available
+            // Stake-weighted average using ONLY verified stakes
             let mut total_stake: u64 = 0;
             let mut weighted_sum: f64 = 0.0;
 
             for (validator_hotkey, eval) in &record.evaluations {
-                // Prefer verified stake from validators map over self-reported stake
-                let stake = self.validators
-                    .get(validator_hotkey)
-                    .copied()
-                    .unwrap_or_else(|| {
-                        // Fallback to self-reported stake only if validator not in map
-                        warn!(
-                            validator = %validator_hotkey.to_hex(),
-                            self_reported_stake = eval.stake,
-                            "Using self-reported stake for unknown validator"
-                        );
-                        eval.stake
-                    });
-
-                total_stake += stake;
-                weighted_sum += eval.score * (stake as f64);
+                // Only use verified stake from validators map - skip unknown validators
+                if let Some(stake) = self.validators.get(validator_hotkey).copied() {
+                    total_stake += stake;
+                    weighted_sum += eval.score * (stake as f64);
+                } else {
+                    // Skip evaluations from unknown validators to prevent stake inflation
+                    warn!(
+                        validator = %validator_hotkey.to_hex(),
+                        self_reported_stake = eval.stake,
+                        "Skipping evaluation from unknown validator - not in verified validators map"
+                    );
+                }
             }
 
             if total_stake == 0 {

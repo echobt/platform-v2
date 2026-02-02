@@ -787,6 +787,79 @@ impl ConsensusEngine {
             return Err(ConsensusError::InvalidSignature(view_change.validator.to_hex()));
         }
 
+        // Verify prepared_proof signatures if present
+        if let Some(ref proof) = view_change.prepared_proof {
+            // Verify PrePrepare signature
+            #[derive(Serialize)]
+            struct PrePrepareSigningData {
+                view: ViewNumber,
+                sequence: SequenceNumber,
+                proposal_hash: [u8; 32],
+            }
+
+            let pre_prepare_signing_data = PrePrepareSigningData {
+                view: proof.pre_prepare.view,
+                sequence: proof.pre_prepare.sequence,
+                proposal_hash: proof.pre_prepare.proposal_hash,
+            };
+
+            let pre_prepare_signing_bytes = bincode::serialize(&pre_prepare_signing_data)
+                .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+            let pre_prepare_valid = self.validator_set
+                .verify_signature(&proof.pre_prepare.leader, &pre_prepare_signing_bytes, &proof.pre_prepare.signature)
+                .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+            if !pre_prepare_valid {
+                return Err(ConsensusError::InvalidSignature(format!(
+                    "Invalid PrePrepare signature from {}",
+                    proof.pre_prepare.leader.to_hex()
+                )));
+            }
+
+            // Verify each Prepare message signature
+            #[derive(Serialize)]
+            struct PrepareSigningData {
+                view: ViewNumber,
+                sequence: SequenceNumber,
+                proposal_hash: [u8; 32],
+            }
+
+            let mut valid_prepare_count = 0;
+            for prepare in &proof.prepares {
+                let prepare_signing_data = PrepareSigningData {
+                    view: prepare.view,
+                    sequence: prepare.sequence,
+                    proposal_hash: prepare.proposal_hash,
+                };
+
+                let prepare_signing_bytes = bincode::serialize(&prepare_signing_data)
+                    .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+                let prepare_valid = self.validator_set
+                    .verify_signature(&prepare.validator, &prepare_signing_bytes, &prepare.signature)
+                    .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+                if prepare_valid {
+                    valid_prepare_count += 1;
+                } else {
+                    warn!(
+                        validator = %prepare.validator.to_hex(),
+                        "Invalid Prepare signature in prepared_proof, skipping"
+                    );
+                }
+            }
+
+            // Verify we have 2f+1 valid prepares
+            let quorum = self.quorum_size();
+            if valid_prepare_count < quorum {
+                return Err(ConsensusError::NotEnoughVotes {
+                    needed: quorum,
+                    have: valid_prepare_count,
+                });
+            }
+        }
+
         let mut state_guard = self.view_change_state.write();
         
         let state = state_guard.get_or_insert_with(|| ViewChangeState {
@@ -863,6 +936,27 @@ impl ConsensusEngine {
                 "{:?} is not the leader for view {}",
                 new_view.leader, new_view.view
             )));
+        }
+
+        // Verify cryptographic signature on the new view message
+        #[derive(Serialize)]
+        struct NewViewSigningData {
+            view: ViewNumber,
+        }
+
+        let signing_data = NewViewSigningData {
+            view: new_view.view,
+        };
+
+        let signing_bytes = bincode::serialize(&signing_data)
+            .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
+
+        let is_valid_sig = self.validator_set
+            .verify_signature(&new_view.leader, &signing_bytes, &new_view.signature)
+            .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
+
+        if !is_valid_sig {
+            return Err(ConsensusError::InvalidSignature(new_view.leader.to_hex()));
         }
 
         // Verify quorum of view changes
