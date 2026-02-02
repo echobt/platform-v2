@@ -144,6 +144,35 @@ pub async fn run_decentralized<C: ServerChallenge + Send + Sync + 'static>(
                 // Weights response, may be used for verification
                 debug!("Received weights response in runner");
             }
+            P2PChallengeMessage::StoreSubmission {
+                submission,
+                challenge_id: msg_challenge_id,
+            } => {
+                if msg_challenge_id == challenge_id {
+                    debug!(
+                        challenge_id = %challenge_id,
+                        submission_hash = %submission.submission_hash,
+                        miner_hotkey = %submission.miner_hotkey,
+                        "Received submission to store - forwarding to evaluation queue"
+                    );
+                    // Submissions are auto-queued for evaluation when stored via P2P
+                    // The P2P layer handles distributed storage and replication
+                } else {
+                    warn!(
+                        expected = %challenge_id,
+                        received = %msg_challenge_id,
+                        "Received StoreSubmission for wrong challenge, ignoring"
+                    );
+                }
+            }
+            P2PChallengeMessage::RequestEvaluationStatus { .. } => {
+                // Request for evaluation status is handled by the P2P layer
+                debug!("Ignoring RequestEvaluationStatus message in runner - handled by P2P layer");
+            }
+            P2PChallengeMessage::EvaluationStatusResponse { .. } => {
+                // Evaluation status responses are handled by the client layer
+                debug!("Ignoring EvaluationStatusResponse message in runner");
+            }
         }
     }
 
