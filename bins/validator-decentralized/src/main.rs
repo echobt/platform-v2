@@ -8,20 +8,25 @@ use anyhow::Result;
 use clap::Parser;
 use parking_lot::RwLock;
 use platform_bittensor::{
-    BlockSync, BlockSyncConfig, BlockSyncEvent, BittensorClient, SubtensorClient, Subtensor,
-    sync_metagraph,
+    BlockSync, BlockSyncConfig, BlockSyncEvent, BittensorClient, Metagraph, SubtensorClient,
+    Subtensor, sync_metagraph,
 };
 use bittensor_rs::chain::{signer_from_seed, BittensorSigner, ExtrinsicWait};
 use platform_core::{Keypair, Hotkey, SUDO_KEY_SS58};
-use platform_distributed_storage::LocalStorageBuilder;
+use platform_distributed_storage::{
+    DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
+};
 use platform_p2p_consensus::{
     P2PConfig, P2PNetwork, P2PMessage, ConsensusEngine, StateManager, ValidatorSet,
-    ValidatorRecord, NetworkEvent,
+    ValidatorRecord, NetworkEvent, ChainState,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
+
+/// Storage key for persisted chain state
+const STATE_STORAGE_KEY: &str = "chain_state";
 
 // ==================== CLI ====================
 
@@ -99,7 +104,7 @@ async fn main() -> Result<()> {
     let storage = LocalStorageBuilder::new(&validator_hotkey)
         .path(data_dir.join("distributed.db").to_string_lossy().to_string())
         .build()?;
-    let _storage = Arc::new(storage);
+    let storage = Arc::new(storage);
     info!("Distributed storage initialized");
 
     // Initialize P2P network config
@@ -113,8 +118,15 @@ async fn main() -> Result<()> {
     let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), p2p_config.min_stake));
     info!("P2P network config initialized");
 
-    // Initialize state manager
-    let state_manager = Arc::new(StateManager::for_netuid(args.netuid));
+    // Initialize state manager, loading persisted state if available
+    let state_manager = Arc::new(
+        load_state_from_storage(&storage, args.netuid)
+            .await
+            .unwrap_or_else(|| {
+                info!("No persisted state found, starting fresh");
+                StateManager::for_netuid(args.netuid)
+            })
+    );
 
     // Create event channel for network events
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<NetworkEvent>(256);
@@ -138,7 +150,8 @@ async fn main() -> Result<()> {
     // Connect to Bittensor
     let subtensor: Option<Arc<Subtensor>>;
     let subtensor_signer: Option<Arc<BittensorSigner>>;
-    let subtensor_client: Option<SubtensorClient>;
+    let mut subtensor_client: Option<SubtensorClient>;
+    let bittensor_client_for_metagraph: Option<Arc<BittensorClient>>;
     let mut block_rx: Option<tokio::sync::mpsc::Receiver<BlockSyncEvent>> = None;
 
     if !args.no_bittensor {
@@ -150,16 +163,16 @@ async fn main() -> Result<()> {
                 let secret = args.secret_key.as_ref()
                     .ok_or_else(|| anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))?;
 
-                match signer_from_seed(secret) {
-                    Ok(signer) => {
-                        info!("Bittensor signer initialized: {}", signer.account_id());
-                        subtensor_signer = Some(Arc::new(signer));
-                    }
-                    Err(e) => {
-                        error!("Failed to create signer: {}", e);
-                        subtensor_signer = None;
-                    }
-                }
+                let signer = signer_from_seed(secret).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to create Bittensor signer from secret key: {}. \
+                        A valid signer is required for weight submission. \
+                        Use --no-bittensor flag if running without Bittensor.",
+                        e
+                    )
+                })?;
+                info!("Bittensor signer initialized: {}", signer.account_id());
+                subtensor_signer = Some(Arc::new(signer));
 
                 subtensor = Some(Arc::new(st));
 
@@ -170,22 +183,13 @@ async fn main() -> Result<()> {
                     ..Default::default()
                 });
 
-                let bittensor_client = BittensorClient::new(&args.subtensor_endpoint).await?;
+                let bittensor_client = Arc::new(BittensorClient::new(&args.subtensor_endpoint).await?);
                 match sync_metagraph(&bittensor_client, args.netuid).await {
                     Ok(mg) => {
                         info!("Metagraph synced: {} neurons", mg.n);
 
                         // Update validator set from metagraph
-                        for (_uid, neuron) in &mg.neurons {
-                            let hotkey_bytes: [u8; 32] = neuron.hotkey.clone().into();
-                            let hotkey = Hotkey(hotkey_bytes);
-                            // Get effective stake capped to u64::MAX (neuron.stake is u128)
-                            let stake = neuron.stake.min(u64::MAX as u128) as u64;
-                            let record = ValidatorRecord::new(hotkey, stake);
-                            if let Err(e) = validator_set.register_validator(record) {
-                                debug!("Skipping validator registration: {}", e);
-                            }
-                        }
+                        update_validator_set_from_metagraph(&mg, &validator_set);
                         info!("Validator set: {} active validators", validator_set.active_count());
 
                         client.set_metagraph(mg);
@@ -195,6 +199,9 @@ async fn main() -> Result<()> {
 
                 subtensor_client = Some(client);
 
+                // Store bittensor client for metagraph refreshes
+                bittensor_client_for_metagraph = Some(bittensor_client.clone());
+
                 // Block sync
                 let mut sync = BlockSync::new(BlockSyncConfig {
                     netuid: args.netuid,
@@ -202,7 +209,6 @@ async fn main() -> Result<()> {
                 });
                 let rx = sync.take_event_receiver();
 
-                let bittensor_client = Arc::new(bittensor_client);
                 if let Err(e) = sync.connect(bittensor_client).await {
                     warn!("Block sync failed: {}", e);
                 } else {
@@ -220,6 +226,7 @@ async fn main() -> Result<()> {
                 subtensor = None;
                 subtensor_signer = None;
                 subtensor_client = None;
+                bittensor_client_for_metagraph = None;
             }
         }
     } else {
@@ -227,6 +234,7 @@ async fn main() -> Result<()> {
         subtensor = None;
         subtensor_signer = None;
         subtensor_client = None;
+        bittensor_client_for_metagraph = None;
     }
 
     info!("Decentralized validator running. Press Ctrl+C to stop.");
@@ -236,6 +244,7 @@ async fn main() -> Result<()> {
     let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(30));
     let mut metagraph_interval = tokio::time::interval(Duration::from_secs(300));
     let mut stale_check_interval = tokio::time::interval(Duration::from_secs(60));
+    let mut state_persist_interval = tokio::time::interval(Duration::from_secs(60));
 
     loop {
         tokio::select! {
@@ -274,9 +283,35 @@ async fn main() -> Result<()> {
                 debug!("Heartbeat: sequence={}, state_hash={}", sequence, hex::encode(&state_hash[..8]));
             }
 
+            // Periodic state persistence
+            _ = state_persist_interval.tick() => {
+                if let Err(e) = persist_state_to_storage(&storage, &state_manager).await {
+                    warn!("Failed to persist state: {}", e);
+                } else {
+                    debug!("State persisted to storage");
+                }
+            }
+
             // Metagraph refresh
             _ = metagraph_interval.tick() => {
-                debug!("Periodic metagraph refresh (if connected)");
+                if let Some(client) = bittensor_client_for_metagraph.as_ref() {
+                    debug!("Refreshing metagraph from Bittensor...");
+                    match sync_metagraph(client, netuid).await {
+                        Ok(mg) => {
+                            info!("Metagraph refreshed: {} neurons", mg.n);
+                            update_validator_set_from_metagraph(&mg, &validator_set);
+                            if let Some(sc) = subtensor_client.as_mut() {
+                                sc.set_metagraph(mg);
+                            }
+                            info!("Validator set updated: {} active validators", validator_set.active_count());
+                        }
+                        Err(e) => {
+                            warn!("Metagraph refresh failed: {}. Will retry on next interval.", e);
+                        }
+                    }
+                } else {
+                    debug!("Metagraph refresh skipped (Bittensor not connected)");
+                }
             }
 
             // Check for stale validators
@@ -315,6 +350,69 @@ fn load_keypair(args: &Args) -> Result<Keypair> {
     }
 
     Ok(Keypair::from_mnemonic(secret)?)
+}
+
+/// Load persisted state from distributed storage
+async fn load_state_from_storage(
+    storage: &Arc<LocalStorage>,
+    netuid: u16,
+) -> Option<StateManager> {
+    let key = StorageKey::new("state", STATE_STORAGE_KEY);
+    match storage.get_json::<ChainState>(&key).await {
+        Ok(Some(state)) => {
+            // Verify the state is for the correct netuid
+            if state.netuid != netuid {
+                warn!(
+                    "Persisted state has different netuid ({} vs {}), ignoring",
+                    state.netuid, netuid
+                );
+                return None;
+            }
+            info!(
+                "Loaded persisted state: sequence={}, epoch={}, validators={}",
+                state.sequence,
+                state.epoch,
+                state.validators.len()
+            );
+            Some(StateManager::new(state))
+        }
+        Ok(None) => {
+            debug!("No persisted state found in storage");
+            None
+        }
+        Err(e) => {
+            warn!("Failed to load persisted state: {}", e);
+            None
+        }
+    }
+}
+
+/// Persist current state to distributed storage
+async fn persist_state_to_storage(
+    storage: &Arc<LocalStorage>,
+    state_manager: &Arc<StateManager>,
+) -> Result<()> {
+    let state = state_manager.snapshot();
+    let key = StorageKey::new("state", STATE_STORAGE_KEY);
+    storage.put_json(key, &state).await?;
+    Ok(())
+}
+
+/// Update validator set from metagraph data
+fn update_validator_set_from_metagraph(
+    metagraph: &Metagraph,
+    validator_set: &Arc<ValidatorSet>,
+) {
+    for (_uid, neuron) in &metagraph.neurons {
+        let hotkey_bytes: [u8; 32] = neuron.hotkey.clone().into();
+        let hotkey = Hotkey(hotkey_bytes);
+        // Get effective stake capped to u64::MAX (neuron.stake is u128)
+        let stake = neuron.stake.min(u64::MAX as u128) as u64;
+        let record = ValidatorRecord::new(hotkey, stake);
+        if let Err(e) = validator_set.register_validator(record) {
+            debug!("Skipping validator registration: {}", e);
+        }
+    }
 }
 
 async fn handle_network_event(
