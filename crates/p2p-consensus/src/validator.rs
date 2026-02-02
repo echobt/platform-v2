@@ -301,7 +301,11 @@ impl ValidatorSet {
             .filter(|v| v.is_active && !v.is_stale(self.stale_threshold_ms))
             .cloned()
             .collect();
-        validators.sort_by(|a, b| b.stake.cmp(&a.stake).then_with(|| a.hotkey.0.cmp(&b.hotkey.0)));
+        validators.sort_by(|a, b| {
+            b.stake
+                .cmp(&a.stake)
+                .then_with(|| a.hotkey.0.cmp(&b.hotkey.0))
+        });
         validators
     }
 
@@ -385,9 +389,7 @@ impl LeaderElection {
         let validators = self.validator_set.validators_by_stake();
         let local_hotkey = self.validator_set.local_hotkey();
 
-        let our_position = validators
-            .iter()
-            .position(|v| v.hotkey == local_hotkey)?;
+        let our_position = validators.iter().position(|v| v.hotkey == local_hotkey)?;
 
         let validator_count = validators.len();
         let current_position = (current_view as usize) % validator_count;
@@ -491,7 +493,10 @@ mod tests {
         let record = ValidatorRecord::new(Hotkey([1u8; 32]), 500); // Below min_stake
 
         let result = set.register_validator(record);
-        assert!(matches!(result, Err(ValidatorError::InsufficientStake { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidatorError::InsufficientStake { .. })
+        ));
     }
 
     #[test]

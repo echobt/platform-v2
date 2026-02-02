@@ -274,7 +274,7 @@ impl WeightAggregator {
 
         // Compute stake-weighted average for each hotkey
         let total_stake: u64 = self.votes.iter().map(|v| v.stake).sum();
-        
+
         let mut final_weights: Vec<(String, f64)> = Vec::new();
 
         for hotkey in all_hotkeys {
@@ -295,7 +295,8 @@ impl WeightAggregator {
                     .votes
                     .iter()
                     .filter_map(|v| v.get_weight(&hotkey))
-                    .sum::<f64>() / count;
+                    .sum::<f64>()
+                    / count;
                 final_weights.push((hotkey, avg));
             }
         }

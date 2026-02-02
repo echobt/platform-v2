@@ -56,10 +56,7 @@ pub struct NetworkBehaviour {
 #[derive(Debug)]
 pub enum NetworkEvent {
     /// Received a P2P message
-    Message {
-        source: PeerId,
-        message: P2PMessage,
-    },
+    Message { source: PeerId, message: P2PMessage },
     /// New peer connected
     PeerConnected(PeerId),
     /// Peer disconnected
@@ -89,10 +86,7 @@ pub enum P2PCommand {
 #[derive(Debug, Clone)]
 pub enum P2PEvent {
     /// Message received from a peer
-    Message {
-        from: PeerId,
-        message: P2PMessage,
-    },
+    Message { from: PeerId, message: P2PMessage },
     /// A peer has connected
     PeerConnected(PeerId),
     /// A peer has disconnected
@@ -188,8 +182,9 @@ impl P2PNetwork {
     ) -> Result<Self, NetworkError> {
         // Generate libp2p keypair from our keypair seed
         let seed = keypair.seed();
-        let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
-            .map_err(|e| NetworkError::Transport(format!("Failed to create libp2p keypair: {}", e)))?;
+        let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed).map_err(|e| {
+            NetworkError::Transport(format!("Failed to create libp2p keypair: {}", e))
+        })?;
         let local_peer_id = PeerId::from(libp2p_keypair.public());
 
         let consensus_topic = IdentTopic::new(&config.consensus_topic);
@@ -257,10 +252,8 @@ impl P2PNetwork {
         let gossipsub = self.create_gossipsub(libp2p_keypair)?;
         let store = MemoryStore::new(self.local_peer_id);
         let kademlia = kad::Behaviour::new(self.local_peer_id, store);
-        let identify_config = identify::Config::new(
-            "/platform/1.0.0".to_string(),
-            libp2p_keypair.public(),
-        );
+        let identify_config =
+            identify::Config::new("/platform/1.0.0".to_string(), libp2p_keypair.public());
         let identify = identify::Behaviour::new(identify_config);
 
         Ok(NetworkBehaviour {
@@ -275,12 +268,16 @@ impl P2PNetwork {
         behaviour
             .gossipsub
             .subscribe(&self.consensus_topic)
-            .map_err(|e| NetworkError::Gossipsub(format!("Failed to subscribe to consensus: {}", e)))?;
+            .map_err(|e| {
+                NetworkError::Gossipsub(format!("Failed to subscribe to consensus: {}", e))
+            })?;
 
         behaviour
             .gossipsub
             .subscribe(&self.challenge_topic)
-            .map_err(|e| NetworkError::Gossipsub(format!("Failed to subscribe to challenge: {}", e)))?;
+            .map_err(|e| {
+                NetworkError::Gossipsub(format!("Failed to subscribe to challenge: {}", e))
+            })?;
 
         info!(
             consensus_topic = %self.config.consensus_topic,
@@ -334,8 +331,8 @@ impl P2PNetwork {
         message: P2PMessage,
     ) -> Result<(), NetworkError> {
         let signed = self.sign_message(message)?;
-        let bytes = bincode::serialize(&signed)
-            .map_err(|e| NetworkError::Serialization(e.to_string()))?;
+        let bytes =
+            bincode::serialize(&signed).map_err(|e| NetworkError::Serialization(e.to_string()))?;
 
         behaviour
             .gossipsub
@@ -353,8 +350,8 @@ impl P2PNetwork {
         message: P2PMessage,
     ) -> Result<(), NetworkError> {
         let signed = self.sign_message(message)?;
-        let bytes = bincode::serialize(&signed)
-            .map_err(|e| NetworkError::Serialization(e.to_string()))?;
+        let bytes =
+            bincode::serialize(&signed).map_err(|e| NetworkError::Serialization(e.to_string()))?;
 
         behaviour
             .gossipsub
@@ -422,12 +419,14 @@ impl P2PNetwork {
         source: PeerId,
         data: &[u8],
     ) -> Result<P2PMessage, NetworkError> {
-        let signed: SignedP2PMessage = bincode::deserialize(data)
-            .map_err(|e| NetworkError::Serialization(e.to_string()))?;
+        let signed: SignedP2PMessage =
+            bincode::deserialize(data).map_err(|e| NetworkError::Serialization(e.to_string()))?;
 
         // Verify signature first
         if !self.verify_message(&signed) {
-            return Err(NetworkError::Gossipsub("Invalid message signature".to_string()));
+            return Err(NetworkError::Gossipsub(
+                "Invalid message signature".to_string(),
+            ));
         }
 
         // Check rate limit before processing
@@ -521,7 +520,10 @@ impl P2PNetwork {
         // Remove signers with no remaining nonces
         seen_nonces.retain(|_, nonces| !nonces.is_empty());
 
-        debug!("Cleaned old nonces, current signer count: {}", seen_nonces.len());
+        debug!(
+            "Cleaned old nonces, current signer count: {}",
+            seen_nonces.len()
+        );
     }
 
     /// Clean stale rate limit entries
@@ -559,17 +561,15 @@ impl P2PNetwork {
 
         for addr_str in &self.config.listen_addrs {
             match addr_str.parse::<Multiaddr>() {
-                Ok(addr) => {
-                    match swarm.listen_on(addr.clone()) {
-                        Ok(_) => {
-                            info!(addr = %addr, "Listening on address");
-                            listening_addrs.push(addr);
-                        }
-                        Err(e) => {
-                            error!(addr = %addr_str, error = %e, "Failed to listen on address");
-                        }
+                Ok(addr) => match swarm.listen_on(addr.clone()) {
+                    Ok(_) => {
+                        info!(addr = %addr, "Listening on address");
+                        listening_addrs.push(addr);
                     }
-                }
+                    Err(e) => {
+                        error!(addr = %addr_str, error = %e, "Failed to listen on address");
+                    }
+                },
                 Err(e) => {
                     error!(addr = %addr_str, error = %e, "Invalid listen address");
                 }
@@ -577,7 +577,9 @@ impl P2PNetwork {
         }
 
         if listening_addrs.is_empty() {
-            return Err(NetworkError::Transport("No valid listen addresses".to_string()));
+            return Err(NetworkError::Transport(
+                "No valid listen addresses".to_string(),
+            ));
         }
 
         Ok(listening_addrs)
@@ -612,8 +614,9 @@ impl P2PNetwork {
 
         // Get libp2p keypair
         let seed = self.keypair.seed();
-        let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
-            .map_err(|e| NetworkError::Transport(format!("Failed to create libp2p keypair: {}", e)))?;
+        let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed).map_err(|e| {
+            NetworkError::Transport(format!("Failed to create libp2p keypair: {}", e))
+        })?;
 
         // Create behaviour
         let mut behaviour = self.create_behaviour(&libp2p_keypair)?;
@@ -670,7 +673,10 @@ impl NetworkRunner {
             ..
         } = event
         {
-            match self.network.handle_gossipsub_message(propagation_source, &message.data) {
+            match self
+                .network
+                .handle_gossipsub_message(propagation_source, &message.data)
+            {
                 Ok(msg) => {
                     debug!(
                         source = %propagation_source,
@@ -751,7 +757,11 @@ impl NetworkRunner {
     /// Handle connection established
     pub async fn handle_connection_established(&self, peer_id: PeerId) -> Result<(), NetworkError> {
         info!(peer = %peer_id, "Connection established");
-        if let Err(e) = self.event_tx.send(NetworkEvent::PeerConnected(peer_id)).await {
+        if let Err(e) = self
+            .event_tx
+            .send(NetworkEvent::PeerConnected(peer_id))
+            .await
+        {
             error!(error = %e, "Failed to send peer connected event");
         }
         Ok(())
@@ -761,7 +771,11 @@ impl NetworkRunner {
     pub async fn handle_connection_closed(&self, peer_id: PeerId) -> Result<(), NetworkError> {
         info!(peer = %peer_id, "Connection closed");
         self.network.peer_mapping.remove_peer(&peer_id);
-        if let Err(e) = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id)).await {
+        if let Err(e) = self
+            .event_tx
+            .send(NetworkEvent::PeerDisconnected(peer_id))
+            .await
+        {
             error!(error = %e, "Failed to send peer disconnected event");
         }
         Ok(())
@@ -803,10 +817,8 @@ pub async fn build_swarm(
     let kademlia = kad::Behaviour::new(local_peer_id, store);
 
     // Create identify
-    let identify_config = identify::Config::new(
-        "/platform/1.0.0".to_string(),
-        libp2p_keypair.public(),
-    );
+    let identify_config =
+        identify::Config::new("/platform/1.0.0".to_string(), libp2p_keypair.public());
     let identify = identify::Behaviour::new(identify_config);
 
     let behaviour = NetworkBehaviour {

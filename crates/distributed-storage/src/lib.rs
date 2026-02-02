@@ -93,7 +93,9 @@ pub mod submission;
 pub mod weights;
 
 // Re-export main types for convenience
-pub use dht::{DhtNetworkHandler, DhtNode, DhtStorage, DhtStorageBuilder, LocalOnlyHandler, RoutingTable};
+pub use dht::{
+    DhtNetworkHandler, DhtNode, DhtStorage, DhtStorageBuilder, LocalOnlyHandler, RoutingTable,
+};
 pub use error::{StorageError, StorageResult};
 pub use local::{LocalStorage, LocalStorageBuilder, ReplicationInfo};
 pub use replication::{
@@ -107,9 +109,7 @@ pub use store::{
 pub use submission::{
     AggregatedEvaluations, EvaluationStatus, StoredEvaluation, StoredSubmission, SubmissionStatus,
 };
-pub use weights::{
-    StoredWeights, ValidatorWeightVote, WeightAggregator, WeightHistory,
-};
+pub use weights::{StoredWeights, ValidatorWeightVote, WeightAggregator, WeightHistory};
 
 #[cfg(test)]
 mod integration_tests {
@@ -151,7 +151,10 @@ mod integration_tests {
         let decoded = StoredSubmission::from_bytes(&stored.data).expect("deserialization failed");
 
         assert_eq!(decoded.challenge_id, "challenge-1");
-        assert_eq!(decoded.miner_hotkey, "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty");
+        assert_eq!(
+            decoded.miner_hotkey,
+            "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
+        );
     }
 
     #[tokio::test]
@@ -283,7 +286,11 @@ mod integration_tests {
         for i in 0..5 {
             let key = StorageKey::submission("challenge-1", &format!("hash-{}", i));
             storage
-                .put(key, format!("data-{}", i).into_bytes(), PutOptions::default())
+                .put(
+                    key,
+                    format!("data-{}", i).into_bytes(),
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put failed");
         }
@@ -291,7 +298,11 @@ mod integration_tests {
         for i in 0..3 {
             let key = StorageKey::submission("challenge-2", &format!("hash-{}", i));
             storage
-                .put(key, format!("data-{}", i).into_bytes(), PutOptions::default())
+                .put(
+                    key,
+                    format!("data-{}", i).into_bytes(),
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put failed");
         }
@@ -325,7 +336,10 @@ mod integration_tests {
         };
 
         // Use extension methods
-        storage.put_json(key.clone(), &data).await.expect("put_json failed");
+        storage
+            .put_json(key.clone(), &data)
+            .await
+            .expect("put_json failed");
 
         let result: Option<TestData> = storage.get_json(&key).await.expect("get_json failed");
         assert_eq!(result, Some(data));

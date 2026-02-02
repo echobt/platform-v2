@@ -170,7 +170,7 @@ impl ConsensusEngine {
             current_round: RwLock::new(None),
             view_change_state: RwLock::new(None),
             decisions: RwLock::new(HashMap::new()),
-            round_timeout_ms: 30_000, // 30 seconds
+            round_timeout_ms: 30_000,       // 30 seconds
             view_change_timeout_ms: 60_000, // 60 seconds
         }
     }
@@ -192,7 +192,8 @@ impl ConsensusEngine {
 
     /// Get the current leader's hotkey
     pub fn current_leader(&self) -> Option<Hotkey> {
-        self.leader_election.leader_for_view(*self.current_view.read())
+        self.leader_election
+            .leader_for_view(*self.current_view.read())
     }
 
     /// Get required quorum size (2f+1)
@@ -207,17 +208,19 @@ impl ConsensusEngine {
         data: Vec<u8>,
     ) -> Result<ConsensusProposal, ConsensusError> {
         let view = *self.current_view.read();
-        
+
         if !self.leader_election.am_i_leader(view) {
             return Err(ConsensusError::NotLeader(view));
         }
 
         // Verify sudo authorization for ConfigUpdate proposals
         if change_type == StateChangeType::ConfigUpdate {
-            let is_sudo = self.state_manager.read(|s| s.is_sudo(&self.keypair.hotkey()));
+            let is_sudo = self
+                .state_manager
+                .read(|s| s.is_sudo(&self.keypair.hotkey()));
             if !is_sudo {
                 return Err(ConsensusError::InvalidProposal(
-                    "ConfigUpdate requires sudo authorization".to_string()
+                    "ConfigUpdate requires sudo authorization".to_string(),
                 ));
             }
         }
@@ -315,7 +318,9 @@ impl ConsensusEngine {
         let computed_hash: [u8; 32] = hasher.finalize().into();
 
         if computed_hash != proposal.proposal.data_hash {
-            return Err(ConsensusError::InvalidProposal("Data hash mismatch".to_string()));
+            return Err(ConsensusError::InvalidProposal(
+                "Data hash mismatch".to_string(),
+            ));
         }
 
         // Verify cryptographic signature on the proposal
@@ -341,9 +346,10 @@ impl ConsensusEngine {
             signer: proposal.proposer.clone(),
         };
 
-        let is_valid_sig = signed_msg.verify()
+        let is_valid_sig = signed_msg
+            .verify()
             .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
-        
+
         if !is_valid_sig {
             return Err(ConsensusError::InvalidSignature(proposal.proposer.to_hex()));
         }
@@ -353,7 +359,7 @@ impl ConsensusEngine {
             let is_sudo = self.state_manager.read(|s| s.is_sudo(&proposal.proposer));
             if !is_sudo {
                 return Err(ConsensusError::InvalidProposal(
-                    "ConfigUpdate requires sudo authorization".to_string()
+                    "ConfigUpdate requires sudo authorization".to_string(),
                 ));
             }
         }
@@ -367,7 +373,7 @@ impl ConsensusEngine {
 
         // Create prepare message
         let prepare = self.create_prepare(view, sequence, computed_hash)?;
-        
+
         info!(view, sequence, "Handling proposal, sending prepare");
         Ok(prepare)
     }
@@ -459,7 +465,9 @@ impl ConsensusEngine {
         // Mark as locally prepared
         if let Some(round) = self.current_round.write().as_mut() {
             round.local_prepared = true;
-            round.prepares.insert(self.keypair.hotkey(), prepare.clone());
+            round
+                .prepares
+                .insert(self.keypair.hotkey(), prepare.clone());
         }
 
         Ok(prepare)
@@ -492,7 +500,9 @@ impl ConsensusEngine {
 
         // Validate proposal hash
         if prepare.proposal_hash != round.proposal_hash {
-            return Err(ConsensusError::InvalidProposal("Proposal hash mismatch".to_string()));
+            return Err(ConsensusError::InvalidProposal(
+                "Proposal hash mismatch".to_string(),
+            ));
         }
 
         // Verify cryptographic signature on the prepare message
@@ -512,7 +522,8 @@ impl ConsensusEngine {
         let signing_bytes = bincode::serialize(&signing_data)
             .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-        let is_valid_sig = self.validator_set
+        let is_valid_sig = self
+            .validator_set
             .verify_signature(&prepare.validator, &signing_bytes, &prepare.signature)
             .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
 
@@ -617,7 +628,9 @@ impl ConsensusEngine {
 
         // Validate proposal hash
         if commit.proposal_hash != round.proposal_hash {
-            return Err(ConsensusError::InvalidProposal("Proposal hash mismatch".to_string()));
+            return Err(ConsensusError::InvalidProposal(
+                "Proposal hash mismatch".to_string(),
+            ));
         }
 
         // Verify cryptographic signature on the commit message
@@ -637,7 +650,8 @@ impl ConsensusEngine {
         let signing_bytes = bincode::serialize(&signing_data)
             .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-        let is_valid_sig = self.validator_set
+        let is_valid_sig = self
+            .validator_set
             .verify_signature(&commit.validator, &signing_bytes, &commit.signature)
             .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
 
@@ -690,7 +704,10 @@ impl ConsensusEngine {
     }
 
     /// Initiate view change
-    pub fn initiate_view_change(&self, new_view: ViewNumber) -> Result<ViewChangeMessage, ConsensusError> {
+    pub fn initiate_view_change(
+        &self,
+        new_view: ViewNumber,
+    ) -> Result<ViewChangeMessage, ConsensusError> {
         let current_view = *self.current_view.read();
         if new_view <= current_view {
             return Err(ConsensusError::ViewMismatch {
@@ -779,12 +796,19 @@ impl ConsensusEngine {
         let signing_bytes = bincode::serialize(&signing_data)
             .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-        let is_valid_sig = self.validator_set
-            .verify_signature(&view_change.validator, &signing_bytes, &view_change.signature)
+        let is_valid_sig = self
+            .validator_set
+            .verify_signature(
+                &view_change.validator,
+                &signing_bytes,
+                &view_change.signature,
+            )
             .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
 
         if !is_valid_sig {
-            return Err(ConsensusError::InvalidSignature(view_change.validator.to_hex()));
+            return Err(ConsensusError::InvalidSignature(
+                view_change.validator.to_hex(),
+            ));
         }
 
         // Verify prepared_proof signatures if present
@@ -806,8 +830,13 @@ impl ConsensusEngine {
             let pre_prepare_signing_bytes = bincode::serialize(&pre_prepare_signing_data)
                 .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-            let pre_prepare_valid = self.validator_set
-                .verify_signature(&proof.pre_prepare.leader, &pre_prepare_signing_bytes, &proof.pre_prepare.signature)
+            let pre_prepare_valid = self
+                .validator_set
+                .verify_signature(
+                    &proof.pre_prepare.leader,
+                    &pre_prepare_signing_bytes,
+                    &proof.pre_prepare.signature,
+                )
                 .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
 
             if !pre_prepare_valid {
@@ -836,8 +865,13 @@ impl ConsensusEngine {
                 let prepare_signing_bytes = bincode::serialize(&prepare_signing_data)
                     .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-                let prepare_valid = self.validator_set
-                    .verify_signature(&prepare.validator, &prepare_signing_bytes, &prepare.signature)
+                let prepare_valid = self
+                    .validator_set
+                    .verify_signature(
+                        &prepare.validator,
+                        &prepare_signing_bytes,
+                        &prepare.signature,
+                    )
                     .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
 
                 if prepare_valid {
@@ -861,7 +895,7 @@ impl ConsensusEngine {
         }
 
         let mut state_guard = self.view_change_state.write();
-        
+
         let state = state_guard.get_or_insert_with(|| ViewChangeState {
             new_view: view_change.new_view,
             view_changes: HashMap::new(),
@@ -886,9 +920,11 @@ impl ConsensusEngine {
         // Check if we have quorum and are the new leader
         let quorum = self.quorum_size();
         let new_view = state.new_view;
-        
+
         if state.view_changes.len() >= quorum
-            && self.leader_election.is_leader(&self.keypair.hotkey(), new_view)
+            && self
+                .leader_election
+                .is_leader(&self.keypair.hotkey(), new_view)
         {
             info!(new_view, "View change quorum reached, becoming new leader");
 
@@ -951,7 +987,8 @@ impl ConsensusEngine {
         let signing_bytes = bincode::serialize(&signing_data)
             .map_err(|e| ConsensusError::InvalidProposal(e.to_string()))?;
 
-        let is_valid_sig = self.validator_set
+        let is_valid_sig = self
+            .validator_set
             .verify_signature(&new_view.leader, &signing_bytes, &new_view.signature)
             .map_err(|e| ConsensusError::InvalidSignature(e.to_string()))?;
 
@@ -1071,7 +1108,10 @@ mod tests {
 
         assert_eq!(proposal.view, 0);
         assert_eq!(proposal.sequence, 1);
-        assert_eq!(proposal.proposal.change_type, StateChangeType::ChallengeSubmission);
+        assert_eq!(
+            proposal.proposal.change_type,
+            StateChangeType::ChallengeSubmission
+        );
     }
 
     #[test]

@@ -48,12 +48,12 @@ pub use messages::{
     CommitMessage, ConsensusProposal, EvaluationMessage, EvaluationMetrics, HeartbeatMessage,
     MerkleNode, MerkleProof, NewViewMessage, P2PMessage, PeerAnnounceMessage, PrePrepare,
     PrepareMessage, PreparedProof, ProposalContent, RoundId, SequenceNumber, SignedP2PMessage,
-    StateChangeType, StateRequest, StateResponse, SubmissionMessage, ViewChangeMessage,
-    ViewNumber, WeightVoteMessage,
+    StateChangeType, StateRequest, StateResponse, SubmissionMessage, ViewChangeMessage, ViewNumber,
+    WeightVoteMessage,
 };
 pub use network::{
-    NetworkBehaviour, NetworkError, NetworkEvent, NetworkRunner, P2PCommand, P2PEvent,
-    P2PNetwork, PeerMapping,
+    NetworkBehaviour, NetworkError, NetworkEvent, NetworkRunner, P2PCommand, P2PEvent, P2PNetwork,
+    PeerMapping,
 };
 pub use state::{
     build_merkle_proof, compute_merkle_root, verify_merkle_proof, ChainState, ChallengeConfig,

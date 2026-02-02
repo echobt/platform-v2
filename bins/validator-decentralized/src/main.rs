@@ -5,20 +5,20 @@
 //! Submits weights to Bittensor at epoch boundaries.
 
 use anyhow::Result;
+use bittensor_rs::chain::{signer_from_seed, BittensorSigner, ExtrinsicWait};
 use clap::Parser;
 use parking_lot::RwLock;
 use platform_bittensor::{
-    BlockSync, BlockSyncConfig, BlockSyncEvent, BittensorClient, Metagraph, SubtensorClient,
-    Subtensor, sync_metagraph,
+    sync_metagraph, BittensorClient, BlockSync, BlockSyncConfig, BlockSyncEvent, Metagraph,
+    Subtensor, SubtensorClient,
 };
-use bittensor_rs::chain::{signer_from_seed, BittensorSigner, ExtrinsicWait};
-use platform_core::{Keypair, Hotkey, SUDO_KEY_SS58};
+use platform_core::{Hotkey, Keypair, SUDO_KEY_SS58};
 use platform_distributed_storage::{
     DistributedStoreExt, LocalStorage, LocalStorageBuilder, StorageKey,
 };
 use platform_p2p_consensus::{
-    P2PConfig, P2PNetwork, P2PMessage, ConsensusEngine, StateManager, ValidatorSet,
-    ValidatorRecord, NetworkEvent, ChainState,
+    ChainState, ConsensusEngine, NetworkEvent, P2PConfig, P2PMessage, P2PNetwork, StateManager,
+    ValidatorRecord, ValidatorSet,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,8 +81,9 @@ struct Args {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,validator_decentralized=debug,platform_p2p_consensus=debug".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "info,validator_decentralized=debug,platform_p2p_consensus=debug".into()
+            }),
         )
         .init();
 
@@ -102,7 +103,12 @@ async fn main() -> Result<()> {
 
     // Initialize distributed storage
     let storage = LocalStorageBuilder::new(&validator_hotkey)
-        .path(data_dir.join("distributed.db").to_string_lossy().to_string())
+        .path(
+            data_dir
+                .join("distributed.db")
+                .to_string_lossy()
+                .to_string(),
+        )
         .build()?;
     let storage = Arc::new(storage);
     info!("Distributed storage initialized");
@@ -125,7 +131,7 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|| {
                 info!("No persisted state found, starting fresh");
                 StateManager::for_netuid(args.netuid)
-            })
+            }),
     );
 
     // Create event channel for network events
@@ -138,7 +144,10 @@ async fn main() -> Result<()> {
         validator_set.clone(),
         event_tx.clone(),
     )?);
-    info!("P2P network initialized, local peer: {:?}", network.local_peer_id());
+    info!(
+        "P2P network initialized, local peer: {:?}",
+        network.local_peer_id()
+    );
 
     // Initialize consensus engine
     let consensus = Arc::new(RwLock::new(ConsensusEngine::new(
@@ -160,7 +169,9 @@ async fn main() -> Result<()> {
         let state_path = data_dir.join("subtensor_state.json");
         match Subtensor::with_persistence(&args.subtensor_endpoint, state_path).await {
             Ok(st) => {
-                let secret = args.secret_key.as_ref()
+                let secret = args
+                    .secret_key
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))?;
 
                 let signer = signer_from_seed(secret).map_err(|e| {
@@ -183,14 +194,18 @@ async fn main() -> Result<()> {
                     ..Default::default()
                 });
 
-                let bittensor_client = Arc::new(BittensorClient::new(&args.subtensor_endpoint).await?);
+                let bittensor_client =
+                    Arc::new(BittensorClient::new(&args.subtensor_endpoint).await?);
                 match sync_metagraph(&bittensor_client, args.netuid).await {
                     Ok(mg) => {
                         info!("Metagraph synced: {} neurons", mg.n);
 
                         // Update validator set from metagraph
                         update_validator_set_from_metagraph(&mg, &validator_set);
-                        info!("Validator set: {} active validators", validator_set.active_count());
+                        info!(
+                            "Validator set: {} active validators",
+                            validator_set.active_count()
+                        );
 
                         client.set_metagraph(mg);
                     }
@@ -333,7 +348,9 @@ async fn main() -> Result<()> {
 }
 
 fn load_keypair(args: &Args) -> Result<Keypair> {
-    let secret = args.secret_key.as_ref()
+    let secret = args
+        .secret_key
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("VALIDATOR_SECRET_KEY required"))?
         .trim();
 
@@ -353,10 +370,7 @@ fn load_keypair(args: &Args) -> Result<Keypair> {
 }
 
 /// Load persisted state from distributed storage
-async fn load_state_from_storage(
-    storage: &Arc<LocalStorage>,
-    netuid: u16,
-) -> Option<StateManager> {
+async fn load_state_from_storage(storage: &Arc<LocalStorage>, netuid: u16) -> Option<StateManager> {
     let key = StorageKey::new("state", STATE_STORAGE_KEY);
     match storage.get_json::<ChainState>(&key).await {
         Ok(Some(state)) => {
@@ -399,10 +413,7 @@ async fn persist_state_to_storage(
 }
 
 /// Update validator set from metagraph data
-fn update_validator_set_from_metagraph(
-    metagraph: &Metagraph,
-    validator_set: &Arc<ValidatorSet>,
-) {
+fn update_validator_set_from_metagraph(metagraph: &Metagraph, validator_set: &Arc<ValidatorSet>) {
     for (_uid, neuron) in &metagraph.neurons {
         let hotkey_bytes: [u8; 32] = neuron.hotkey.clone().into();
         let hotkey = Hotkey(hotkey_bytes);
@@ -422,93 +433,99 @@ async fn handle_network_event(
     _state_manager: &Arc<StateManager>,
 ) {
     match event {
-        NetworkEvent::Message { source, message } => {
-            match message {
-                P2PMessage::Proposal(proposal) => {
-                    let engine = consensus.write();
-                    match engine.handle_proposal(proposal) {
-                        Ok(_prepare) => {
-                            debug!("Proposal handled, prepare sent");
-                        }
-                        Err(e) => {
-                            warn!("Failed to handle proposal: {}", e);
-                        }
+        NetworkEvent::Message { source, message } => match message {
+            P2PMessage::Proposal(proposal) => {
+                let engine = consensus.write();
+                match engine.handle_proposal(proposal) {
+                    Ok(_prepare) => {
+                        debug!("Proposal handled, prepare sent");
                     }
-                }
-                P2PMessage::PrePrepare(_pp) => {
-                    debug!("Received pre-prepare from {:?}", source);
-                }
-                P2PMessage::Prepare(p) => {
-                    let engine = consensus.write();
-                    match engine.handle_prepare(p) {
-                        Ok(Some(_commit)) => {
-                            debug!("Prepare quorum reached, commit created");
-                        }
-                        Ok(None) => {
-                            debug!("Prepare received, waiting for quorum");
-                        }
-                        Err(e) => {
-                            warn!("Failed to handle prepare: {}", e);
-                        }
+                    Err(e) => {
+                        warn!("Failed to handle proposal: {}", e);
                     }
-                }
-                P2PMessage::Commit(c) => {
-                    let engine = consensus.write();
-                    match engine.handle_commit(c) {
-                        Ok(Some(decision)) => {
-                            info!("Consensus achieved for sequence {}", decision.sequence);
-                        }
-                        Ok(None) => {
-                            debug!("Commit received, waiting for quorum");
-                        }
-                        Err(e) => {
-                            warn!("Failed to handle commit: {}", e);
-                        }
-                    }
-                }
-                P2PMessage::ViewChange(vc) => {
-                    let engine = consensus.write();
-                    match engine.handle_view_change(vc) {
-                        Ok(Some(new_view)) => {
-                            info!("View change completed, new view: {}", new_view.view);
-                        }
-                        Ok(None) => {
-                            debug!("View change in progress");
-                        }
-                        Err(e) => {
-                            warn!("View change error: {}", e);
-                        }
-                    }
-                }
-                P2PMessage::NewView(nv) => {
-                    let engine = consensus.write();
-                    if let Err(e) = engine.handle_new_view(nv) {
-                        warn!("Failed to handle new view: {}", e);
-                    }
-                }
-                P2PMessage::Heartbeat(hb) => {
-                    if let Err(e) = validator_set.update_from_heartbeat(
-                        &hb.validator,
-                        hb.state_hash,
-                        hb.sequence,
-                        hb.stake,
-                    ) {
-                        debug!("Heartbeat update skipped: {}", e);
-                    }
-                }
-                _ => {
-                    debug!("Unhandled P2P message type");
                 }
             }
-        }
+            P2PMessage::PrePrepare(_pp) => {
+                debug!("Received pre-prepare from {:?}", source);
+            }
+            P2PMessage::Prepare(p) => {
+                let engine = consensus.write();
+                match engine.handle_prepare(p) {
+                    Ok(Some(_commit)) => {
+                        debug!("Prepare quorum reached, commit created");
+                    }
+                    Ok(None) => {
+                        debug!("Prepare received, waiting for quorum");
+                    }
+                    Err(e) => {
+                        warn!("Failed to handle prepare: {}", e);
+                    }
+                }
+            }
+            P2PMessage::Commit(c) => {
+                let engine = consensus.write();
+                match engine.handle_commit(c) {
+                    Ok(Some(decision)) => {
+                        info!("Consensus achieved for sequence {}", decision.sequence);
+                    }
+                    Ok(None) => {
+                        debug!("Commit received, waiting for quorum");
+                    }
+                    Err(e) => {
+                        warn!("Failed to handle commit: {}", e);
+                    }
+                }
+            }
+            P2PMessage::ViewChange(vc) => {
+                let engine = consensus.write();
+                match engine.handle_view_change(vc) {
+                    Ok(Some(new_view)) => {
+                        info!("View change completed, new view: {}", new_view.view);
+                    }
+                    Ok(None) => {
+                        debug!("View change in progress");
+                    }
+                    Err(e) => {
+                        warn!("View change error: {}", e);
+                    }
+                }
+            }
+            P2PMessage::NewView(nv) => {
+                let engine = consensus.write();
+                if let Err(e) = engine.handle_new_view(nv) {
+                    warn!("Failed to handle new view: {}", e);
+                }
+            }
+            P2PMessage::Heartbeat(hb) => {
+                if let Err(e) = validator_set.update_from_heartbeat(
+                    &hb.validator,
+                    hb.state_hash,
+                    hb.sequence,
+                    hb.stake,
+                ) {
+                    debug!("Heartbeat update skipped: {}", e);
+                }
+            }
+            _ => {
+                debug!("Unhandled P2P message type");
+            }
+        },
         NetworkEvent::PeerConnected(peer_id) => {
             info!("Peer connected: {}", peer_id);
         }
         NetworkEvent::PeerDisconnected(peer_id) => {
             info!("Peer disconnected: {}", peer_id);
         }
-        NetworkEvent::PeerIdentified { peer_id, hotkey, addresses } => {
-            info!("Peer identified: {} with {} addresses", peer_id, addresses.len());
+        NetworkEvent::PeerIdentified {
+            peer_id,
+            hotkey,
+            addresses,
+        } => {
+            info!(
+                "Peer identified: {} with {} addresses",
+                peer_id,
+                addresses.len()
+            );
             if let Some(hk) = hotkey {
                 debug!("  Hotkey: {:?}", hk);
             }
@@ -529,8 +546,15 @@ async fn handle_block_event(
         BlockSyncEvent::NewBlock { block_number, .. } => {
             debug!("Block {}", block_number);
         }
-        BlockSyncEvent::EpochTransition { old_epoch, new_epoch, block } => {
-            info!("Epoch transition: {} -> {} (block {})", old_epoch, new_epoch, block);
+        BlockSyncEvent::EpochTransition {
+            old_epoch,
+            new_epoch,
+            block,
+        } => {
+            info!(
+                "Epoch transition: {} -> {} (block {})",
+                old_epoch, new_epoch, block
+            );
 
             // Transition state to next epoch
             state_manager.apply(|state| {
@@ -538,13 +562,14 @@ async fn handle_block_event(
             });
         }
         BlockSyncEvent::CommitWindowOpen { epoch, block } => {
-            info!("=== COMMIT WINDOW OPEN: epoch {} block {} ===", epoch, block);
+            info!(
+                "=== COMMIT WINDOW OPEN: epoch {} block {} ===",
+                epoch, block
+            );
 
             // Get weights from decentralized state
             if let (Some(st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {
-                let final_weights = state_manager.apply(|state| {
-                    state.finalize_weights()
-                });
+                let final_weights = state_manager.apply(|state| state.finalize_weights());
 
                 match final_weights {
                     Some(weights) if !weights.is_empty() => {
@@ -553,15 +578,18 @@ async fn handle_block_event(
                         let vals: Vec<u16> = weights.iter().map(|(_, w)| *w).collect();
 
                         info!("Submitting weights for {} UIDs", uids.len());
-                        match st.set_mechanism_weights(
-                            sig,
-                            netuid,
-                            0,
-                            &uids,
-                            &vals,
-                            version_key,
-                            ExtrinsicWait::Finalized,
-                        ).await {
+                        match st
+                            .set_mechanism_weights(
+                                sig,
+                                netuid,
+                                0,
+                                &uids,
+                                &vals,
+                                version_key,
+                                ExtrinsicWait::Finalized,
+                            )
+                            .await
+                        {
                             Ok(resp) if resp.success => {
                                 info!("Weights submitted: {:?}", resp.tx_hash);
                             }
@@ -572,15 +600,18 @@ async fn handle_block_event(
                     _ => {
                         info!("No weights for epoch {} - submitting burn weights", epoch);
                         // Submit burn weights (uid 0 with max weight)
-                        match st.set_mechanism_weights(
-                            sig,
-                            netuid,
-                            0,
-                            &[0u16],
-                            &[65535u16],
-                            version_key,
-                            ExtrinsicWait::Finalized,
-                        ).await {
+                        match st
+                            .set_mechanism_weights(
+                                sig,
+                                netuid,
+                                0,
+                                &[0u16],
+                                &[65535u16],
+                                version_key,
+                                ExtrinsicWait::Finalized,
+                            )
+                            .await
+                        {
                             Ok(resp) if resp.success => {
                                 info!("Burn weights submitted: {:?}", resp.tx_hash);
                             }
@@ -592,7 +623,10 @@ async fn handle_block_event(
             }
         }
         BlockSyncEvent::RevealWindowOpen { epoch, block } => {
-            info!("=== REVEAL WINDOW OPEN: epoch {} block {} ===", epoch, block);
+            info!(
+                "=== REVEAL WINDOW OPEN: epoch {} block {} ===",
+                epoch, block
+            );
 
             if let (Some(st), Some(sig)) = (subtensor.as_ref(), signer.as_ref()) {
                 if st.has_pending_commits().await {
@@ -614,8 +648,16 @@ async fn handle_block_event(
                 }
             }
         }
-        BlockSyncEvent::PhaseChange { old_phase, new_phase, epoch, .. } => {
-            debug!("Phase change: {:?} -> {:?} (epoch {})", old_phase, new_phase, epoch);
+        BlockSyncEvent::PhaseChange {
+            old_phase,
+            new_phase,
+            epoch,
+            ..
+        } => {
+            debug!(
+                "Phase change: {:?} -> {:?} (epoch {})",
+                old_phase, new_phase, epoch
+            );
         }
         BlockSyncEvent::Disconnected(reason) => {
             warn!("Bittensor disconnected: {}", reason);

@@ -163,7 +163,8 @@ impl LocalStorage {
 
         // Update index
         let index_key = format!("{}:{}", key.namespace, hex::encode(&key.key));
-        self.index_tree.insert(index_key.as_bytes(), db_key.as_slice())?;
+        self.index_tree
+            .insert(index_key.as_bytes(), db_key.as_slice())?;
 
         // Update namespace count
         {
@@ -313,11 +314,10 @@ impl DistributedStore for LocalStorage {
         // Create the stored value
         let mut stored_value = match existing {
             Some(existing_entry) => {
-                let new_metadata =
-                    existing_entry
-                        .value
-                        .metadata
-                        .update(&value, Some(self.node_id.clone()));
+                let new_metadata = existing_entry
+                    .value
+                    .metadata
+                    .update(&value, Some(self.node_id.clone()));
                 StoredValue {
                     data: value,
                     metadata: new_metadata,
@@ -601,7 +601,10 @@ mod tests {
 
         assert!(storage.delete(&key).await.expect("delete failed"));
 
-        let result = storage.get(&key, GetOptions::default()).await.expect("get failed");
+        let result = storage
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed");
         assert!(result.is_none());
     }
 
@@ -629,7 +632,11 @@ mod tests {
         for i in 0..5 {
             let key = StorageKey::new("test", format!("key{}", i));
             storage
-                .put(key, format!("value{}", i).into_bytes(), PutOptions::default())
+                .put(
+                    key,
+                    format!("value{}", i).into_bytes(),
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put failed");
         }
@@ -661,7 +668,11 @@ mod tests {
         for i in 0..10 {
             let key = StorageKey::new("test", format!("key{:02}", i));
             storage
-                .put(key, format!("value{}", i).into_bytes(), PutOptions::default())
+                .put(
+                    key,
+                    format!("value{}", i).into_bytes(),
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put failed");
         }

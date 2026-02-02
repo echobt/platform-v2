@@ -109,13 +109,9 @@ pub async fn run_decentralized<C: ServerChallenge + Send + Sync + 'static>(
 
                 // Evaluate each submission
                 for submission in submissions {
-                    let result = evaluate_submission(
-                        &challenge,
-                        &challenge_id,
-                        &submission,
-                        &message_tx,
-                    )
-                    .await;
+                    let result =
+                        evaluate_submission(&challenge, &challenge_id, &submission, &message_tx)
+                            .await;
 
                     if let Err(e) = result {
                         error!(
@@ -250,7 +246,9 @@ async fn evaluate_submission<C: ServerChallenge>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{EvaluationResponse, ServerChallenge, ValidationRequest, ValidationResponse};
+    use crate::server::{
+        EvaluationResponse, ServerChallenge, ValidationRequest, ValidationResponse,
+    };
     use async_trait::async_trait;
     use serde_json::json;
 
@@ -297,13 +295,7 @@ mod tests {
 
         // Start runner in background
         let runner_handle = tokio::spawn(async move {
-            run_decentralized(
-                challenge,
-                result_tx,
-                rx,
-                "test-validator".to_string(),
-            )
-            .await
+            run_decentralized(challenge, result_tx, rx, "test-validator".to_string()).await
         });
 
         // Send submissions
@@ -323,13 +315,10 @@ mod tests {
         .expect("Send should work");
 
         // Wait for result
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            result_rx.recv(),
-        )
-        .await
-        .expect("Should receive result within timeout")
-        .expect("Should have result");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), result_rx.recv())
+            .await
+            .expect("Should receive result within timeout")
+            .expect("Should have result");
 
         if let P2PChallengeMessage::EvaluationResult {
             submission_hash,
@@ -347,11 +336,7 @@ mod tests {
         drop(tx);
 
         // Wait for runner to complete
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            runner_handle,
-        )
-        .await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), runner_handle).await;
     }
 
     #[tokio::test]
@@ -362,13 +347,7 @@ mod tests {
         let challenge = MockChallenge { should_fail: true };
 
         tokio::spawn(async move {
-            let _ = run_decentralized(
-                challenge,
-                result_tx,
-                rx,
-                "test-validator".to_string(),
-            )
-            .await;
+            let _ = run_decentralized(challenge, result_tx, rx, "test-validator".to_string()).await;
         });
 
         let submission = PendingSubmission {
@@ -386,18 +365,13 @@ mod tests {
         .await
         .expect("Send should work");
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            result_rx.recv(),
-        )
-        .await
-        .expect("Should receive result within timeout")
-        .expect("Should have result");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), result_rx.recv())
+            .await
+            .expect("Should receive result within timeout")
+            .expect("Should have result");
 
         if let P2PChallengeMessage::EvaluationResult {
-            score,
-            result_data,
-            ..
+            score, result_data, ..
         } = result
         {
             // Failed evaluations should have zero score
@@ -419,13 +393,7 @@ mod tests {
         let challenge = MockChallenge { should_fail: false };
 
         tokio::spawn(async move {
-            let _ = run_decentralized(
-                challenge,
-                result_tx,
-                rx,
-                "test-validator".to_string(),
-            )
-            .await;
+            let _ = run_decentralized(challenge, result_tx, rx, "test-validator".to_string()).await;
         });
 
         // Send submission for wrong challenge
@@ -445,11 +413,8 @@ mod tests {
         .expect("Send should work");
 
         // Should not receive any result because challenge ID doesn't match
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            result_rx.recv(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(500), result_rx.recv()).await;
 
         assert!(result.is_err(), "Should timeout because no result is sent");
 
@@ -464,26 +429,17 @@ mod tests {
         let challenge = MockChallenge { should_fail: false };
 
         let handle = tokio::spawn(async move {
-            run_decentralized(
-                challenge,
-                result_tx,
-                rx,
-                "test-validator".to_string(),
-            )
-            .await
+            run_decentralized(challenge, result_tx, rx, "test-validator".to_string()).await
         });
 
         // Close the channel
         drop(tx);
 
         // Runner should complete successfully
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .expect("Should complete within timeout")
-        .expect("Task should not panic");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("Should complete within timeout")
+            .expect("Task should not panic");
 
         assert!(result.is_ok());
     }
@@ -540,9 +496,7 @@ mod tests {
 
         let msg = rx.recv().await.expect("Should have message");
         if let P2PChallengeMessage::EvaluationResult {
-            score,
-            result_data,
-            ..
+            score, result_data, ..
         } = msg
         {
             assert!((score - 0.0).abs() < f64::EPSILON);

@@ -294,7 +294,8 @@ impl ChainState {
             signer: validator.clone(),
         };
 
-        let is_valid = signed_msg.verify()
+        let is_valid = signed_msg
+            .verify()
             .map_err(|e| StateError::InvalidSignature(e.to_string()))?;
 
         if !is_valid {
@@ -392,7 +393,8 @@ impl ChainState {
             signer: validator.clone(),
         };
 
-        let is_valid = signed_msg.verify()
+        let is_valid = signed_msg
+            .verify()
             .map_err(|e| StateError::InvalidSignature(e.to_string()))?;
 
         if !is_valid {
@@ -451,11 +453,8 @@ impl ChainState {
         }
 
         // Normalize and convert to u16
-        let max_weight = uid_weights
-            .values()
-            .copied()
-            .fold(0.0f64, f64::max);
-        
+        let max_weight = uid_weights.values().copied().fold(0.0f64, f64::max);
+
         let final_weights: Vec<(u16, u16)> = if max_weight > 0.0 {
             uid_weights
                 .into_iter()
@@ -768,7 +767,7 @@ mod tests {
     #[test]
     fn test_evaluation_flow() {
         use platform_core::Keypair;
-        
+
         let mut state = ChainState::new(100);
 
         // Add evaluation record
@@ -858,7 +857,7 @@ mod tests {
     #[test]
     fn test_weight_voting() {
         use platform_core::Keypair;
-        
+
         let mut state = ChainState::new(100);
 
         // Create keypairs for validators

@@ -389,7 +389,11 @@ impl AggregatedEvaluations {
 
     /// Check if we have enough evaluations for consensus
     pub fn has_quorum(&self, required: usize) -> bool {
-        let successful_count = self.evaluations.iter().filter(|e| e.is_successful()).count();
+        let successful_count = self
+            .evaluations
+            .iter()
+            .filter(|e| e.is_successful())
+            .count();
         successful_count >= required
     }
 }
@@ -467,14 +471,10 @@ mod tests {
 
     #[test]
     fn test_evaluation_score_clamping() {
-        let eval1 = StoredEvaluation::new(
-            "c", "h", "v", 1.5, 0, serde_json::Value::Null, vec![],
-        );
+        let eval1 = StoredEvaluation::new("c", "h", "v", 1.5, 0, serde_json::Value::Null, vec![]);
         assert_eq!(eval1.score, 1.0);
 
-        let eval2 = StoredEvaluation::new(
-            "c", "h", "v", -0.5, 0, serde_json::Value::Null, vec![],
-        );
+        let eval2 = StoredEvaluation::new("c", "h", "v", -0.5, 0, serde_json::Value::Null, vec![]);
         assert_eq!(eval2.score, 0.0);
     }
 
@@ -494,13 +494,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_timed_out() {
-        let eval = StoredEvaluation::timed_out(
-            "challenge1",
-            "hash123",
-            "validator1",
-            30000,
-            vec![],
-        );
+        let eval =
+            StoredEvaluation::timed_out("challenge1", "hash123", "validator1", 30000, vec![]);
 
         assert!(!eval.is_successful());
         assert_eq!(eval.status, EvaluationStatus::TimedOut);
@@ -510,7 +505,13 @@ mod tests {
     #[test]
     fn test_evaluation_key() {
         let eval = StoredEvaluation::new(
-            "challenge1", "hash123", "validator1", 0.5, 0, serde_json::Value::Null, vec![],
+            "challenge1",
+            "hash123",
+            "validator1",
+            0.5,
+            0,
+            serde_json::Value::Null,
+            vec![],
         );
 
         assert_eq!(eval.key(), "challenge1:hash123:validator1");
@@ -647,13 +648,19 @@ mod tests {
         let mut map1 = serde_json::Map::new();
         map1.insert("zebra".to_string(), serde_json::json!("value_z"));
         map1.insert("alpha".to_string(), serde_json::json!("value_a"));
-        map1.insert("middle".to_string(), serde_json::json!({"nested_b": 2, "nested_a": 1}));
+        map1.insert(
+            "middle".to_string(),
+            serde_json::json!({"nested_b": 2, "nested_a": 1}),
+        );
         let metadata1 = serde_json::Value::Object(map1);
 
         // Create metadata with keys in different order
         let mut map2 = serde_json::Map::new();
         map2.insert("alpha".to_string(), serde_json::json!("value_a"));
-        map2.insert("middle".to_string(), serde_json::json!({"nested_a": 1, "nested_b": 2}));
+        map2.insert(
+            "middle".to_string(),
+            serde_json::json!({"nested_a": 1, "nested_b": 2}),
+        );
         map2.insert("zebra".to_string(), serde_json::json!("value_z"));
         let metadata2 = serde_json::Value::Object(map2);
 

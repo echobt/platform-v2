@@ -196,10 +196,19 @@ pub trait DhtNetworkHandler: Send + Sync {
     async fn find_nodes(&self, key_hash: &[u8; 32]) -> StorageResult<Vec<DhtNode>>;
 
     /// Get a value from a remote node
-    async fn get_value(&self, node: &DhtNode, key: &StorageKey) -> StorageResult<Option<StoredValue>>;
+    async fn get_value(
+        &self,
+        node: &DhtNode,
+        key: &StorageKey,
+    ) -> StorageResult<Option<StoredValue>>;
 
     /// Put a value to a remote node
-    async fn put_value(&self, node: &DhtNode, key: &StorageKey, value: &StoredValue) -> StorageResult<()>;
+    async fn put_value(
+        &self,
+        node: &DhtNode,
+        key: &StorageKey,
+        value: &StoredValue,
+    ) -> StorageResult<()>;
 
     /// Delete a value from a remote node
     async fn delete_value(&self, node: &DhtNode, key: &StorageKey) -> StorageResult<bool>;
@@ -217,11 +226,20 @@ impl DhtNetworkHandler for LocalOnlyHandler {
         Ok(Vec::new())
     }
 
-    async fn get_value(&self, _node: &DhtNode, _key: &StorageKey) -> StorageResult<Option<StoredValue>> {
+    async fn get_value(
+        &self,
+        _node: &DhtNode,
+        _key: &StorageKey,
+    ) -> StorageResult<Option<StoredValue>> {
         Ok(None)
     }
 
-    async fn put_value(&self, _node: &DhtNode, _key: &StorageKey, _value: &StoredValue) -> StorageResult<()> {
+    async fn put_value(
+        &self,
+        _node: &DhtNode,
+        _key: &StorageKey,
+        _value: &StoredValue,
+    ) -> StorageResult<()> {
         Ok(())
     }
 
@@ -317,9 +335,22 @@ impl<H: DhtNetworkHandler> DhtStorage<H> {
     }
 
     /// Perform a quorum read across multiple nodes
-    async fn quorum_read(&self, key: &StorageKey, quorum_size: usize) -> StorageResult<Option<StoredValue>> {
+    async fn quorum_read(
+        &self,
+        key: &StorageKey,
+        quorum_size: usize,
+    ) -> StorageResult<Option<StoredValue>> {
         // First check local
-        let local_result = self.local.get(key, GetOptions { local_only: true, ..Default::default() }).await?;
+        let local_result = self
+            .local
+            .get(
+                key,
+                GetOptions {
+                    local_only: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
 
         if !self.dht_enabled {
             return Ok(local_result);
@@ -411,8 +442,16 @@ impl<H: DhtNetworkHandler> DhtStorage<H> {
 
 #[async_trait]
 impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
-    async fn get(&self, key: &StorageKey, options: GetOptions) -> StorageResult<Option<StoredValue>> {
-        trace!("DhtStorage::get key={} local_only={}", key, options.local_only);
+    async fn get(
+        &self,
+        key: &StorageKey,
+        options: GetOptions,
+    ) -> StorageResult<Option<StoredValue>> {
+        trace!(
+            "DhtStorage::get key={} local_only={}",
+            key,
+            options.local_only
+        );
 
         if options.local_only || !self.dht_enabled {
             return self.local.get(key, options).await;
@@ -435,7 +474,12 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
         }
     }
 
-    async fn put(&self, key: StorageKey, value: Vec<u8>, options: PutOptions) -> StorageResult<ValueMetadata> {
+    async fn put(
+        &self,
+        key: StorageKey,
+        value: Vec<u8>,
+        options: PutOptions,
+    ) -> StorageResult<ValueMetadata> {
         trace!(
             "DhtStorage::put key={} local_only={} quorum={}",
             key,
@@ -448,7 +492,10 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
             local_only: true,
             ..options.clone()
         };
-        let metadata = self.local.put(key.clone(), value.clone(), local_options).await?;
+        let metadata = self
+            .local
+            .put(key.clone(), value.clone(), local_options)
+            .await?;
 
         if options.local_only || !self.dht_enabled {
             return Ok(metadata);
@@ -466,7 +513,10 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
                 .unwrap_or(self.replication_config.write_quorum);
 
             let replicated = self.quorum_write(&key, &stored_value, quorum_size).await?;
-            debug!("DhtStorage::put key={} replicated to {} nodes", key, replicated);
+            debug!(
+                "DhtStorage::put key={} replicated to {} nodes",
+                key, replicated
+            );
         } else {
             // Background replication (fire and forget)
             let _replicated = self.quorum_write(&key, &stored_value, 1).await;
@@ -513,7 +563,9 @@ impl<H: DhtNetworkHandler + 'static> DistributedStore for DhtStorage<H> {
     ) -> StorageResult<ListResult> {
         // List operations are always local
         // DHT doesn't support efficient range queries
-        self.local.list_prefix(namespace, prefix, limit, continuation_token).await
+        self.local
+            .list_prefix(namespace, prefix, limit, continuation_token)
+            .await
     }
 
     async fn stats(&self) -> StorageResult<StorageStats> {
@@ -562,9 +614,9 @@ impl<H: DhtNetworkHandler> DhtStorageBuilder<H> {
 
     /// Build a local-only storage
     pub fn build_local_only(self) -> StorageResult<DhtStorage<LocalOnlyHandler>> {
-        let local = self.local.ok_or_else(|| {
-            StorageError::InvalidData("Local storage is required".to_string())
-        })?;
+        let local = self
+            .local
+            .ok_or_else(|| StorageError::InvalidData("Local storage is required".to_string()))?;
 
         Ok(DhtStorage::local_only(local))
     }
@@ -582,15 +634,19 @@ impl<H: DhtNetworkHandler + 'static> DhtStorageBuilder<H> {
 
     /// Build the DHT storage
     pub fn build(self) -> StorageResult<DhtStorage<H>> {
-        let local = self.local.ok_or_else(|| {
-            StorageError::InvalidData("Local storage is required".to_string())
-        })?;
+        let local = self
+            .local
+            .ok_or_else(|| StorageError::InvalidData("Local storage is required".to_string()))?;
 
         let network = self.network.ok_or_else(|| {
             StorageError::InvalidData("Network handler is required for DHT mode".to_string())
         })?;
 
-        Ok(DhtStorage::with_network(local, network, self.replication_config))
+        Ok(DhtStorage::with_network(
+            local,
+            network,
+            self.replication_config,
+        ))
     }
 }
 
@@ -620,7 +676,10 @@ mod tests {
             .await
             .expect("put failed");
 
-        let result = dht.get(&key, GetOptions::default()).await.expect("get failed");
+        let result = dht
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed");
         assert!(result.is_some());
         assert_eq!(result.unwrap().data, value);
     }

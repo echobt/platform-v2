@@ -228,19 +228,14 @@ impl P2PChallengeClient {
             "Requesting pending submissions via P2P"
         );
 
-        self.config
-            .message_tx
-            .send(msg)
-            .await
-            .map_err(|e| ChallengeError::Network(format!("Failed to request submissions: {}", e)))?;
+        self.config.message_tx.send(msg).await.map_err(|e| {
+            ChallengeError::Network(format!("Failed to request submissions: {}", e))
+        })?;
 
         // Wait for response (with timeout)
         let mut rx = self.config.message_rx.write();
-        match tokio::time::timeout(
-            Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
-            rx.recv(),
-        )
-        .await
+        match tokio::time::timeout(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS), rx.recv())
+            .await
         {
             Ok(Some(P2PChallengeMessage::SubmissionsResponse { submissions, .. })) => {
                 debug!(
@@ -342,11 +337,8 @@ impl P2PChallengeClient {
 
         // Wait for response
         let mut rx = self.config.message_rx.write();
-        match tokio::time::timeout(
-            Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
-            rx.recv(),
-        )
-        .await
+        match tokio::time::timeout(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS), rx.recv())
+            .await
         {
             Ok(Some(P2PChallengeMessage::WeightsResponse { weights, .. })) => {
                 debug!(
@@ -511,19 +503,13 @@ mod tests {
         let (config, mut rx) = create_test_config();
         let client = P2PChallengeClient::new(config);
 
-        let weights = vec![
-            ("hotkey1".to_string(), 0.6),
-            ("hotkey2".to_string(), 0.4),
-        ];
+        let weights = vec![("hotkey1".to_string(), 0.6), ("hotkey2".to_string(), 0.4)];
 
         let result = client.vote_weights(5, weights).await;
         assert!(result.is_ok());
 
         let msg = rx.recv().await.expect("Should receive message");
-        if let P2PChallengeMessage::WeightVote {
-            epoch, weights, ..
-        } = msg
-        {
+        if let P2PChallengeMessage::WeightVote { epoch, weights, .. } = msg {
             assert_eq!(epoch, 5);
             assert_eq!(weights.len(), 2);
         } else {
@@ -661,8 +647,7 @@ mod tests {
         ];
 
         for msg in messages {
-            let json =
-                serde_json::to_string(&msg).expect("All message variants should serialize");
+            let json = serde_json::to_string(&msg).expect("All message variants should serialize");
             let _: P2PChallengeMessage =
                 serde_json::from_str(&json).expect("All message variants should deserialize");
         }

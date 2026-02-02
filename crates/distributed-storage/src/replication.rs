@@ -45,7 +45,7 @@ impl ReplicationConfig {
     pub fn strong_consistency() -> Self {
         Self {
             replication_factor: 3,
-            write_quorum: 3,  // All nodes must confirm
+            write_quorum: 3, // All nodes must confirm
             read_quorum: 2,
             retry_interval_secs: 10,
             max_retries: 5,
@@ -57,7 +57,7 @@ impl ReplicationConfig {
     pub fn high_availability() -> Self {
         Self {
             replication_factor: 3,
-            write_quorum: 1,  // Only one node needed
+            write_quorum: 1, // Only one node needed
             read_quorum: 1,
             retry_interval_secs: 5,
             max_retries: 10,
@@ -201,16 +201,12 @@ impl ConflictResolver {
 
     /// Resolve using last-write-wins
     fn resolve_lww(&self, values: Vec<StoredValue>) -> Option<StoredValue> {
-        values
-            .into_iter()
-            .max_by_key(|v| v.metadata.updated_at)
+        values.into_iter().max_by_key(|v| v.metadata.updated_at)
     }
 
     /// Resolve using highest version
     fn resolve_version(&self, values: Vec<StoredValue>) -> Option<StoredValue> {
-        values
-            .into_iter()
-            .max_by_key(|v| v.metadata.version)
+        values.into_iter().max_by_key(|v| v.metadata.version)
     }
 }
 
@@ -495,7 +491,11 @@ mod tests {
     fn test_replication_state() {
         let mut state = ReplicationState::new(
             "key1",
-            vec!["node1".to_string(), "node2".to_string(), "node3".to_string()],
+            vec![
+                "node1".to_string(),
+                "node2".to_string(),
+                "node3".to_string(),
+            ],
         );
 
         assert!(!state.has_quorum(2));
@@ -575,7 +575,10 @@ mod tests {
             .with_anti_entropy(false);
 
         assert_eq!(policy.config.write_quorum, 3);
-        assert_eq!(policy.conflict_resolution, ConflictResolution::HighestVersion);
+        assert_eq!(
+            policy.conflict_resolution,
+            ConflictResolution::HighestVersion
+        );
         assert!(!policy.enable_anti_entropy);
     }
 
