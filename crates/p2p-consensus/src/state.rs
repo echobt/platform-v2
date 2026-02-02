@@ -362,24 +362,6 @@ impl ChainState {
         }
     }
 
-    /// Add weight vote from validator (legacy method without signature verification)
-    ///
-    /// Prefer using `add_weight_vote_verified` which includes signature verification.
-    pub fn add_weight_vote(&mut self, validator: Hotkey, weights: Vec<(u16, u16)>, epoch: u64) {
-        let votes = self.weight_votes.get_or_insert_with(|| WeightVotes {
-            epoch,
-            netuid: self.netuid,
-            votes: HashMap::new(),
-            finalized: false,
-            final_weights: None,
-        });
-
-        if votes.epoch == epoch && !votes.finalized {
-            votes.votes.insert(validator, weights);
-            self.update_hash();
-        }
-    }
-
     /// Add weight vote from validator with signature verification
     ///
     /// Verifies the provided signature before accepting the weight vote.
@@ -879,15 +861,55 @@ mod tests {
 
     #[test]
     fn test_weight_voting() {
+        use platform_core::Keypair;
+        
         let mut state = ChainState::new(100);
 
-        // Add validators with stakes
-        state.validators.insert(Hotkey([1u8; 32]), 1000);
-        state.validators.insert(Hotkey([2u8; 32]), 2000);
+        // Create keypairs for validators
+        let validator1_keypair = Keypair::generate();
+        let validator2_keypair = Keypair::generate();
+        let validator1 = validator1_keypair.hotkey();
+        let validator2 = validator2_keypair.hotkey();
 
-        // Add weight votes
-        state.add_weight_vote(Hotkey([1u8; 32]), vec![(0, 100), (1, 200)], 1);
-        state.add_weight_vote(Hotkey([2u8; 32]), vec![(0, 150), (1, 100)], 1);
+        // Add validators with stakes
+        state.validators.insert(validator1.clone(), 1000);
+        state.validators.insert(validator2.clone(), 2000);
+
+        // Create signing data structure for weight votes
+        #[derive(serde::Serialize)]
+        struct WeightVoteSigningData {
+            epoch: u64,
+            netuid: u16,
+            weights: Vec<(u16, u16)>,
+        }
+
+        // Create and sign weight vote for validator1
+        let weights1 = vec![(0, 100), (1, 200)];
+        let signing_data1 = WeightVoteSigningData {
+            epoch: 1,
+            netuid: state.netuid,
+            weights: weights1.clone(),
+        };
+        let signing_bytes1 = bincode::serialize(&signing_data1).unwrap();
+        let signature1 = validator1_keypair.sign_bytes(&signing_bytes1).unwrap();
+
+        // Create and sign weight vote for validator2
+        let weights2 = vec![(0, 150), (1, 100)];
+        let signing_data2 = WeightVoteSigningData {
+            epoch: 1,
+            netuid: state.netuid,
+            weights: weights2.clone(),
+        };
+        let signing_bytes2 = bincode::serialize(&signing_data2).unwrap();
+        let signature2 = validator2_keypair.sign_bytes(&signing_bytes2).unwrap();
+
+        // Add weight votes with signature verification
+        state
+            .add_weight_vote_verified(validator1, weights1, 1, &signature1)
+            .expect("Failed to add weight vote for validator1");
+        state
+            .add_weight_vote_verified(validator2, weights2, 1, &signature2)
+            .expect("Failed to add weight vote for validator2");
 
         // Finalize
         let weights = state.finalize_weights().unwrap();
