@@ -257,7 +257,7 @@ pub async fn run(args: ServerArgs) -> Result<()> {
             get(api::evaluations::get_evaluations),
         )
         .with_state(state)
-        .layer(CorsLayer::permissive())
+        .layer(build_cors_layer())
         .layer(TraceLayer::new_for_http());
 
     info!("╔══════════════════════════════════════════════════════════════╗");
@@ -437,10 +437,20 @@ async fn proxy_to_challenge(
         }
     };
 
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
-        .unwrap();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to create HTTP client: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create HTTP client",
+            )
+                .into_response();
+        }
+    };
 
     let mut req_builder = client.request(method, &url);
     for (key, value) in headers.iter() {
@@ -481,6 +491,43 @@ async fn proxy_to_challenge(
     }
 }
 
+/// Build CORS layer based on environment configuration.
+/// In development mode (DEVELOPMENT_MODE env var set), allows any origin.
+/// In production, only whitelisted origins are allowed.
+fn build_cors_layer() -> CorsLayer {
+    let allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "https://platform.network,https://chain.platform.network".to_string());
+
+    if allowed_origins == "*" || std::env::var("DEVELOPMENT_MODE").is_ok() {
+        tracing::warn!("CORS allowing all origins - this should only be used in development!");
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any)
+    } else {
+        let origins: Vec<axum::http::HeaderValue> = allowed_origins
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+            ])
+            .allow_credentials(true)
+    }
+}
+
 /// Start the container broker WebSocket server
 ///
 /// This allows challenges to create sandboxed containers without direct Docker access.
@@ -507,11 +554,25 @@ async fn start_container_broker(port: u16) -> Result<()> {
     // WebSocket config with JWT auth
     let jwt_secret = std::env::var("BROKER_JWT_SECRET").ok();
 
+    // Determine if authentication should be required
+    let is_dev_mode = std::env::var("DEVELOPMENT_MODE").is_ok();
+    if is_dev_mode {
+        warn!("SECURITY WARNING: DEVELOPMENT_MODE is set - WebSocket authentication is DISABLED!");
+        warn!("DO NOT use DEVELOPMENT_MODE in production environments!");
+    }
+
+    if jwt_secret.is_none() && !is_dev_mode {
+        warn!("BROKER_JWT_SECRET not set - a random JWT secret will be generated");
+        warn!("This means JWT tokens will be invalidated on server restart!");
+        warn!("Set BROKER_JWT_SECRET environment variable for production use");
+    }
+
     let ws_config = WsConfig {
         bind_addr: format!("0.0.0.0:{}", port),
         jwt_secret,
         allowed_challenges: vec![], // Allow all challenges
         max_connections_per_challenge: 10,
+        allow_unauthenticated: is_dev_mode, // Only allow unauthenticated in dev mode
     };
 
     info!(

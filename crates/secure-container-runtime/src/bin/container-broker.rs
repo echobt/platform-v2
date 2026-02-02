@@ -96,18 +96,24 @@ async fn main() -> anyhow::Result<()> {
 
     // Start WebSocket server if enabled
     let ws_handle = if ws_port > 0 {
+        let is_dev_mode = std::env::var("BROKER_DEV_MODE").is_ok();
         let ws_config = WsConfig {
             bind_addr: format!("0.0.0.0:{}", ws_port),
             jwt_secret: std::env::var("BROKER_JWT_SECRET").ok(),
+            // SECURITY: Only allow unauthenticated in dev mode
+            allow_unauthenticated: is_dev_mode,
             allowed_challenges: vec![],
             max_connections_per_challenge: 10,
         };
 
-        if ws_config.jwt_secret.is_none() && std::env::var("BROKER_DEV_MODE").is_err() {
-            info!("WARNING: WebSocket running without JWT auth (set BROKER_JWT_SECRET)");
+        if ws_config.jwt_secret.is_none() && !is_dev_mode {
+            warn!("SECURITY WARNING: WebSocket requires JWT auth but BROKER_JWT_SECRET not set. Connections will be rejected unless BROKER_DEV_MODE is enabled.");
         }
 
         info!("WebSocket server: ws://0.0.0.0:{}", ws_port);
+        if is_dev_mode {
+            warn!("WebSocket running in DEV MODE - unauthenticated connections allowed");
+        }
         let broker_clone = broker.clone();
         Some(tokio::spawn(async move {
             if let Err(e) = run_ws_server(broker_clone, ws_config).await {

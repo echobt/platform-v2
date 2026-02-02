@@ -59,14 +59,14 @@ pub enum SubmissionStatus {
     Rejected,
 }
 
-impl ToString for SubmissionStatus {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for SubmissionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SubmissionStatus::Pending => "pending".to_string(),
-            SubmissionStatus::Evaluating => "evaluating".to_string(),
-            SubmissionStatus::Completed => "completed".to_string(),
-            SubmissionStatus::Failed => "failed".to_string(),
-            SubmissionStatus::Rejected => "rejected".to_string(),
+            SubmissionStatus::Pending => write!(f, "pending"),
+            SubmissionStatus::Evaluating => write!(f, "evaluating"),
+            SubmissionStatus::Completed => write!(f, "completed"),
+            SubmissionStatus::Failed => write!(f, "failed"),
+            SubmissionStatus::Rejected => write!(f, "rejected"),
         }
     }
 }
@@ -133,6 +133,7 @@ pub struct SubmitEvaluationRequest {
     pub agent_hash: String,
     pub validator_hotkey: String,
     pub signature: String,
+    pub timestamp: i64,
     pub score: f64,
     pub tasks_passed: u32,
     pub tasks_total: u32,
@@ -250,6 +251,7 @@ pub struct ClaimTaskRequest {
     pub task_id: String,
     pub validator_hotkey: String,
     pub signature: String,
+    pub timestamp: i64,
     pub ttl_seconds: u64,
 }
 

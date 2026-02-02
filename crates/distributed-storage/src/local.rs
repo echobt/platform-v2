@@ -4,6 +4,7 @@
 //! It stores data with replication metadata to track which remote nodes have copies.
 
 use async_trait::async_trait;
+use bincode::Options;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sled::{Db, Tree};
@@ -11,6 +12,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{debug, trace};
+
+/// Maximum size for deserializing storage entries (100MB).
+/// This limit prevents DoS attacks from malformed data causing excessive memory allocation.
+const MAX_ENTRY_SIZE: u64 = 100 * 1024 * 1024;
 
 use crate::error::{StorageError, StorageResult};
 use crate::query::{
@@ -160,7 +165,12 @@ impl LocalStorage {
 
         match self.data_tree.get(&db_key)? {
             Some(bytes) => {
-                let entry: LocalEntry = bincode::deserialize(&bytes)?;
+                // Use options compatible with bincode::serialize (legacy format with fixint encoding)
+                let entry: LocalEntry = bincode::options()
+                    .with_limit(MAX_ENTRY_SIZE)
+                    .with_fixint_encoding()
+                    .allow_trailing_bytes()
+                    .deserialize(&bytes)?;
                 Ok(Some(entry))
             }
             None => Ok(None),
@@ -260,7 +270,12 @@ impl LocalStorage {
         for result in self.data_tree.iter() {
             let (key_bytes, value_bytes) = result?;
 
-            let entry: LocalEntry = bincode::deserialize(&value_bytes)?;
+            // Use options compatible with bincode::serialize (legacy format with fixint encoding)
+            let entry: LocalEntry = bincode::options()
+                .with_limit(MAX_ENTRY_SIZE)
+                .with_fixint_encoding()
+                .allow_trailing_bytes()
+                .deserialize(&value_bytes)?;
 
             if entry.replication.needs_replication {
                 // Parse the key back into a StorageKey
@@ -466,7 +481,12 @@ impl LocalStorage {
 
             // Get the actual data
             if let Some(value_bytes) = self.data_tree.get(&data_key_bytes)? {
-                let entry: LocalEntry = bincode::deserialize(&value_bytes)?;
+                // Use options compatible with bincode::serialize (legacy format with fixint encoding)
+                let entry: LocalEntry = bincode::options()
+                    .with_limit(MAX_ENTRY_SIZE)
+                    .with_fixint_encoding()
+                    .allow_trailing_bytes()
+                    .deserialize(&value_bytes)?;
 
                 // Skip expired entries
                 if entry.value.metadata.is_expired() {
@@ -648,7 +668,12 @@ impl DistributedStore for LocalStorage {
 
             // Get the actual data
             if let Some(value_bytes) = self.data_tree.get(&data_key)? {
-                let entry: LocalEntry = bincode::deserialize(&value_bytes)?;
+                // Use options compatible with bincode::serialize (legacy format with fixint encoding)
+                let entry: LocalEntry = bincode::options()
+                    .with_limit(MAX_ENTRY_SIZE)
+                    .with_fixint_encoding()
+                    .allow_trailing_bytes()
+                    .deserialize(&value_bytes)?;
 
                 // Skip expired entries
                 if entry.value.metadata.is_expired() {

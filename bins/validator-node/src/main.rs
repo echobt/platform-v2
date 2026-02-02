@@ -478,6 +478,7 @@ async fn main() -> Result<()> {
         jwt_secret: Some(jwt_secret),
         allowed_challenges: vec![],
         max_connections_per_challenge: 10,
+        allow_unauthenticated: false, // Require authentication in production
     };
     let broker_clone = broker.clone();
     tokio::spawn(async move {
@@ -951,6 +952,7 @@ fn load_keypair(args: &Args) -> Result<Keypair> {
 
 /// Submit weights for a given epoch
 /// This is the core weight submission logic, extracted to be reusable
+#[allow(clippy::too_many_arguments)]
 async fn submit_weights_for_epoch(
     epoch: u64,
     platform_client: &Arc<PlatformServerClient>,
@@ -1188,6 +1190,7 @@ async fn submit_weights_for_epoch(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_block_event(
     event: BlockSyncEvent,
     platform_client: &Arc<PlatformServerClient>,

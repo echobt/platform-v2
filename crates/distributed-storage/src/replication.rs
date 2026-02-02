@@ -102,20 +102,15 @@ impl ReplicationConfig {
 }
 
 /// Strategy for resolving conflicts between divergent values
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ConflictResolution {
     /// Last write wins (based on timestamp)
+    #[default]
     LastWriteWins,
     /// Highest version number wins
     HighestVersion,
     /// Custom merge function (caller provides)
     Custom,
-}
-
-impl Default for ConflictResolution {
-    fn default() -> Self {
-        Self::LastWriteWins
-    }
 }
 
 /// Replication policy for a namespace

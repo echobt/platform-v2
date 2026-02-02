@@ -414,7 +414,7 @@ async fn persist_state_to_storage(
 
 /// Update validator set from metagraph data
 fn update_validator_set_from_metagraph(metagraph: &Metagraph, validator_set: &Arc<ValidatorSet>) {
-    for (_uid, neuron) in &metagraph.neurons {
+    for neuron in metagraph.neurons.values() {
         let hotkey_bytes: [u8; 32] = neuron.hotkey.clone().into();
         let hotkey = Hotkey(hotkey_bytes);
         // Get effective stake capped to u64::MAX (neuron.stake is u128)

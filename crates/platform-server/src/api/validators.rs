@@ -36,6 +36,32 @@ pub async fn register_validator(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ValidatorRegistration>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::api::auth::verify_signature;
+
+    // Verify timestamp (within 60 seconds)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("System time before UNIX epoch")
+        .as_secs() as i64;
+
+    if (now - req.timestamp).abs() > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "success": false, "error": "Timestamp too old or in future" }),
+            ),
+        ));
+    }
+
+    // Verify signature
+    let message = format!("register:{}:{}:{}", req.hotkey, req.stake, req.timestamp);
+    if !verify_signature(&req.hotkey, &message, &req.signature) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "success": false, "error": "Invalid signature" })),
+        ));
+    }
+
     queries::upsert_validator(&state.db, &req.hotkey, req.stake)
         .await
         .map_err(|e| {
@@ -60,17 +86,48 @@ pub async fn register_validator(
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatRequest {
     pub hotkey: String,
-    #[allow(dead_code)] // Kept for API compatibility
     pub signature: String,
+    pub timestamp: i64,
 }
 
 pub async fn heartbeat(
     State(state): State<Arc<AppState>>,
     Json(req): Json<HeartbeatRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::api::auth::verify_signature;
+
+    // Verify timestamp (within 60 seconds)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("System time before UNIX epoch")
+        .as_secs() as i64;
+
+    if (now - req.timestamp).abs() > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "success": false, "error": "Timestamp too old or in future" }),
+            ),
+        ));
+    }
+
+    // Verify signature
+    let message = format!("heartbeat:{}:{}", req.hotkey, req.timestamp);
+    if !verify_signature(&req.hotkey, &message, &req.signature) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "success": false, "error": "Invalid signature" })),
+        ));
+    }
+
     queries::upsert_validator(&state.db, &req.hotkey, 0)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "success": false, "error": "Database error" })),
+            )
+        })?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -237,11 +294,12 @@ mod tests {
 
     #[test]
     fn test_heartbeat_request_deserialize() {
-        let json = r#"{"hotkey": "5GrwvaEF...", "signature": "sig123"}"#;
+        let json = r#"{"hotkey": "5GrwvaEF...", "signature": "sig123", "timestamp": 1234567890}"#;
         let req: HeartbeatRequest = serde_json::from_str(json).unwrap();
 
         assert_eq!(req.hotkey, "5GrwvaEF...");
         assert_eq!(req.signature, "sig123");
+        assert_eq!(req.timestamp, 1234567890);
     }
 
     // =========================================================================

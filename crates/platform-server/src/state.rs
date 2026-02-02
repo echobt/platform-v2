@@ -141,6 +141,7 @@ impl AppState {
     }
 
     /// Set tempo (called when syncing with Bittensor)
+    #[allow(dead_code)]
     pub fn set_tempo(&self, tempo: u64) {
         *self.tempo.write() = tempo;
     }
@@ -151,6 +152,7 @@ impl AppState {
     }
 
     /// Set current block
+    #[allow(dead_code)]
     pub fn set_current_block(&self, block: u64) {
         *self.current_block.write() = block;
     }
@@ -176,7 +178,7 @@ impl AppState {
         use sp_core::crypto::Ss58Codec;
         let mg = self.metagraph.read();
         if let Some(ref metagraph) = *mg {
-            for (_uid, neuron) in &metagraph.neurons {
+            for neuron in metagraph.neurons.values() {
                 if neuron.hotkey.to_ss58check() == hotkey {
                     // Stake is u128, convert to u64 (saturating)
                     return neuron.stake.min(u64::MAX as u128) as u64;

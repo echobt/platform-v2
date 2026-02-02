@@ -33,12 +33,11 @@ pub async fn list_submissions(
     Query(query): Query<ListSubmissionsQuery>,
 ) -> Result<Json<Vec<Submission>>, StatusCode> {
     // Still return data from local DB for backward compatibility during migration
-    let submissions = if query.status.as_deref() == Some("pending") {
-        queries::get_pending_submissions(&state.db).await
-    } else {
-        queries::get_pending_submissions(&state.db).await
-    }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // TODO: Add support for filtering by other statuses when needed
+    let _status_filter = query.status.as_deref();
+    let submissions = queries::get_pending_submissions(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let limit = query.limit.unwrap_or(100);
     let limited: Vec<_> = submissions.into_iter().take(limit).collect();

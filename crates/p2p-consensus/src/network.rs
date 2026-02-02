@@ -84,6 +84,7 @@ pub enum P2PCommand {
 
 /// Events emitted from the P2P network
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum P2PEvent {
     /// Message received from a peer
     Message { from: PeerId, message: P2PMessage },
@@ -428,10 +429,7 @@ impl P2PNetwork {
             signer: signed.signer.clone(),
         };
 
-        match signed_msg.verify() {
-            Ok(valid) => valid,
-            Err(_) => false,
-        }
+        signed_msg.verify().unwrap_or_default()
     }
 
     /// Handle incoming gossipsub message
@@ -738,11 +736,13 @@ impl NetworkRunner {
             kad::Event::RoutingUpdated { peer, .. } => {
                 debug!(peer = %peer, "Kademlia routing updated");
             }
-            kad::Event::OutboundQueryProgressed { result, .. } => {
-                if let kad::QueryResult::Bootstrap(Ok(_)) = result {
-                    info!("Kademlia bootstrap completed");
-                }
+            kad::Event::OutboundQueryProgressed {
+                result: kad::QueryResult::Bootstrap(Ok(_)),
+                ..
+            } => {
+                info!("Kademlia bootstrap completed");
             }
+            kad::Event::OutboundQueryProgressed { .. } => {}
             _ => {}
         }
         Ok(())

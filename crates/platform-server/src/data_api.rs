@@ -58,7 +58,38 @@ pub async fn list_tasks(
 pub async fn claim_task(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ClaimTaskRequest>,
-) -> Result<Json<ClaimTaskResponse>, StatusCode> {
+) -> Result<Json<ClaimTaskResponse>, (StatusCode, Json<ClaimTaskResponse>)> {
+    use crate::api::auth::verify_signature;
+
+    // Verify timestamp (within 60 seconds)
+    let current_time = now();
+    if (current_time - req.timestamp).abs() > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ClaimTaskResponse {
+                success: false,
+                lease: None,
+                error: Some("Timestamp too old or in future".to_string()),
+            }),
+        ));
+    }
+
+    // Verify signature
+    let message = format!(
+        "claim_task:{}:{}:{}",
+        req.task_id, req.validator_hotkey, req.timestamp
+    );
+    if !verify_signature(&req.validator_hotkey, &message, &req.signature) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ClaimTaskResponse {
+                success: false,
+                lease: None,
+                error: Some("Invalid signature".to_string()),
+            }),
+        ));
+    }
+
     let lease = queries::claim_task(
         &state.db,
         &req.task_id,
@@ -66,7 +97,16 @@ pub async fn claim_task(
         req.ttl_seconds,
     )
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ClaimTaskResponse {
+                success: false,
+                lease: None,
+                error: Some("Database error".to_string()),
+            }),
+        )
+    })?;
 
     if let Some(ref l) = lease {
         // Broadcast claim event
@@ -91,8 +131,8 @@ pub async fn claim_task(
 #[derive(Debug, Deserialize)]
 pub struct RenewRequest {
     pub validator_hotkey: String,
-    #[allow(dead_code)] // Kept for API compatibility
     pub signature: String,
+    pub timestamp: i64,
     pub ttl_seconds: u64,
 }
 
@@ -101,10 +141,40 @@ pub async fn renew_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
     Json(req): Json<RenewRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::api::auth::verify_signature;
+
+    // Verify timestamp (within 60 seconds)
+    let current_time = now();
+    if (current_time - req.timestamp).abs() > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "success": false, "error": "Timestamp too old or in future" }),
+            ),
+        ));
+    }
+
+    // Verify signature
+    let message = format!(
+        "renew_task:{}:{}:{}",
+        task_id, req.validator_hotkey, req.timestamp
+    );
+    if !verify_signature(&req.validator_hotkey, &message, &req.signature) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "success": false, "error": "Invalid signature" })),
+        ));
+    }
+
     let success = queries::renew_task(&state.db, &task_id, &req.validator_hotkey, req.ttl_seconds)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "success": false, "error": "Database error" })),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({ "success": success })))
 }
@@ -112,8 +182,8 @@ pub async fn renew_task(
 #[derive(Debug, Deserialize)]
 pub struct AckRequest {
     pub validator_hotkey: String,
-    #[allow(dead_code)] // Kept for API compatibility
     pub signature: String,
+    pub timestamp: i64,
 }
 
 /// Acknowledge task completion (marks task as done)
@@ -121,10 +191,40 @@ pub async fn ack_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
     Json(req): Json<AckRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::api::auth::verify_signature;
+
+    // Verify timestamp (within 60 seconds)
+    let current_time = now();
+    if (current_time - req.timestamp).abs() > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "success": false, "error": "Timestamp too old or in future" }),
+            ),
+        ));
+    }
+
+    // Verify signature
+    let message = format!(
+        "ack_task:{}:{}:{}",
+        task_id, req.validator_hotkey, req.timestamp
+    );
+    if !verify_signature(&req.validator_hotkey, &message, &req.signature) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "success": false, "error": "Invalid signature" })),
+        ));
+    }
+
     let success = queries::ack_task(&state.db, &task_id, &req.validator_hotkey)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "success": false, "error": "Database error" })),
+            )
+        })?;
 
     if success {
         info!("Task {} acknowledged by {}", task_id, req.validator_hotkey);
@@ -136,8 +236,8 @@ pub async fn ack_task(
 #[derive(Debug, Deserialize)]
 pub struct FailRequest {
     pub validator_hotkey: String,
-    #[allow(dead_code)] // Kept for API compatibility
     pub signature: String,
+    pub timestamp: i64,
     pub reason: Option<String>,
 }
 
@@ -146,7 +246,32 @@ pub async fn fail_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
     Json(req): Json<FailRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::api::auth::verify_signature;
+
+    // Verify timestamp (within 60 seconds)
+    let current_time = now();
+    if (current_time - req.timestamp).abs() > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "success": false, "error": "Timestamp too old or in future" }),
+            ),
+        ));
+    }
+
+    // Verify signature
+    let message = format!(
+        "fail_task:{}:{}:{}",
+        task_id, req.validator_hotkey, req.timestamp
+    );
+    if !verify_signature(&req.validator_hotkey, &message, &req.signature) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "success": false, "error": "Invalid signature" })),
+        ));
+    }
+
     let success = queries::fail_task(
         &state.db,
         &task_id,
@@ -154,7 +279,12 @@ pub async fn fail_task(
         req.reason.as_deref(),
     )
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "success": false, "error": "Database error" })),
+        )
+    })?;
 
     Ok(Json(serde_json::json!({ "success": success })))
 }
@@ -180,6 +310,7 @@ pub async fn write_result(
         agent_hash: req.agent_hash.clone(),
         validator_hotkey: req.validator_hotkey.clone(),
         signature: req.signature.clone(),
+        timestamp: now(),
         score: req.score,
         tasks_passed: 0,
         tasks_total: 0,
@@ -332,12 +463,57 @@ mod tests {
         let json = r#"{
             "validator_hotkey": "test_validator",
             "signature": "test_sig",
+            "timestamp": 1234567890,
             "ttl_seconds": 300
         }"#;
 
         let request: RenewRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.validator_hotkey, "test_validator");
         assert_eq!(request.signature, "test_sig");
+        assert_eq!(request.timestamp, 1234567890);
         assert_eq!(request.ttl_seconds, 300);
+    }
+
+    #[test]
+    fn test_ack_request_deserialization() {
+        let json = r#"{
+            "validator_hotkey": "test_validator",
+            "signature": "test_sig",
+            "timestamp": 1234567890
+        }"#;
+
+        let request: AckRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.validator_hotkey, "test_validator");
+        assert_eq!(request.signature, "test_sig");
+        assert_eq!(request.timestamp, 1234567890);
+    }
+
+    #[test]
+    fn test_fail_request_deserialization() {
+        let json = r#"{
+            "validator_hotkey": "test_validator",
+            "signature": "test_sig",
+            "timestamp": 1234567890,
+            "reason": "Task failed due to error"
+        }"#;
+
+        let request: FailRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.validator_hotkey, "test_validator");
+        assert_eq!(request.signature, "test_sig");
+        assert_eq!(request.timestamp, 1234567890);
+        assert_eq!(request.reason, Some("Task failed due to error".to_string()));
+    }
+
+    #[test]
+    fn test_fail_request_deserialization_no_reason() {
+        let json = r#"{
+            "validator_hotkey": "test_validator",
+            "signature": "test_sig",
+            "timestamp": 1234567890
+        }"#;
+
+        let request: FailRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.validator_hotkey, "test_validator");
+        assert_eq!(request.reason, None);
     }
 }

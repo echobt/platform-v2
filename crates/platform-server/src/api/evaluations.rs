@@ -15,6 +15,41 @@ pub async fn submit_evaluation(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SubmitEvaluationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Verify timestamp is recent (within 5 minutes) to prevent replay attacks
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("System time before UNIX epoch")
+        .as_secs() as i64;
+    if (current_time - req.timestamp).abs() > 300 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "Timestamp too old or in future (must be within 5 minutes)"
+            })),
+        ));
+    }
+
+    // Verify signature from validator
+    let message = format!(
+        "submit_evaluation:{}:{}:{}:{}",
+        req.submission_id, req.agent_hash, req.validator_hotkey, req.timestamp
+    );
+
+    if !crate::api::auth::verify_signature(&req.validator_hotkey, &message, &req.signature) {
+        tracing::warn!(
+            "Invalid signature for evaluation submission from validator: {}",
+            &req.validator_hotkey[..16.min(req.validator_hotkey.len())]
+        );
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "Invalid signature"
+            })),
+        ));
+    }
+
     let evaluation = queries::create_evaluation(&state.db, &req)
         .await
         .map_err(|e| {
@@ -75,6 +110,7 @@ mod tests {
             "agent_hash": "hash456",
             "validator_hotkey": "5GrwvaEF...",
             "signature": "sig789",
+            "timestamp": 1234567890,
             "score": 0.95,
             "tasks_passed": 19,
             "tasks_total": 20,
@@ -92,6 +128,7 @@ mod tests {
         assert_eq!(req.tasks_passed, 19);
         assert_eq!(req.tasks_total, 20);
         assert_eq!(req.tasks_failed, 1);
+        assert_eq!(req.timestamp, 1234567890);
     }
 
     #[test]
@@ -101,6 +138,7 @@ mod tests {
             "agent_hash": "hash456",
             "validator_hotkey": "5GrwvaEF...",
             "signature": "sig789",
+            "timestamp": 1234567890,
             "score": 0.5,
             "tasks_passed": 5,
             "tasks_total": 10,
@@ -116,6 +154,7 @@ mod tests {
         assert!(req.execution_time_ms.is_none());
         assert!(req.task_results.is_none());
         assert!(req.execution_log.is_none());
+        assert_eq!(req.timestamp, 1234567890);
     }
 
     // =========================================================================

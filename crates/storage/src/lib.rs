@@ -193,6 +193,9 @@ impl Storage {
 
     /// Load a challenge
     pub fn load_challenge(&self, id: &ChallengeId) -> Result<Option<Challenge>> {
+        use bincode::Options;
+        const MAX_CHALLENGE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB limit
+
         let key = id.0.as_bytes();
         let data = self
             .challenges_tree
@@ -201,7 +204,13 @@ impl Storage {
 
         match data {
             Some(bytes) => {
-                let challenge: Challenge = bincode::deserialize(&bytes)
+                // Use options compatible with bincode::serialize (little-endian, variable int, trailing allowed)
+                let challenge: Challenge = bincode::DefaultOptions::new()
+                    .with_fixint_encoding()
+                    .with_little_endian()
+                    .allow_trailing_bytes()
+                    .with_limit(MAX_CHALLENGE_SIZE)
+                    .deserialize(&bytes)
                     .map_err(|e| MiniChainError::Serialization(e.to_string()))?;
                 Ok(Some(challenge))
             }
@@ -249,6 +258,9 @@ impl Storage {
 
     /// Load validator info
     pub fn load_validator(&self, hotkey: &Hotkey) -> Result<Option<ValidatorInfo>> {
+        use bincode::Options;
+        const MAX_VALIDATOR_SIZE: u64 = 1024 * 1024; // 1 MB limit
+
         let key = hotkey.as_bytes();
         let data = self
             .validators_tree
@@ -257,7 +269,13 @@ impl Storage {
 
         match data {
             Some(bytes) => {
-                let info: ValidatorInfo = bincode::deserialize(&bytes)
+                // Use options compatible with bincode::serialize (little-endian, variable int, trailing allowed)
+                let info: ValidatorInfo = bincode::DefaultOptions::new()
+                    .with_fixint_encoding()
+                    .with_little_endian()
+                    .allow_trailing_bytes()
+                    .with_limit(MAX_VALIDATOR_SIZE)
+                    .deserialize(&bytes)
                     .map_err(|e| MiniChainError::Serialization(e.to_string()))?;
                 Ok(Some(info))
             }
