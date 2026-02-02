@@ -5,6 +5,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Well-known bootstrap nodes for the Platform P2P network.
+/// These are operated by the subnet team and always available.
+///
+/// Each entry should be a multiaddr in the format:
+/// `/ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>`
+///
+/// Note: Real PeerIDs will be added when production nodes are deployed.
+/// For now, this is empty and operators should configure their own bootstrap peers
+/// or use the Platform-provided list once available.
+pub const DEFAULT_BOOTSTRAP_NODES: &[&str] = &[
+    // Bootstrap node 1 (operated by Platform team)
+    // "/ip4/bootstrap1.platform.network/tcp/9000/p2p/PEER_ID",
+    // Bootstrap node 2 (operated by Platform team)
+    // "/ip4/bootstrap2.platform.network/tcp/9000/p2p/PEER_ID",
+];
+
 /// P2P network configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct P2PConfig {
@@ -88,14 +104,17 @@ impl P2PConfig {
         }
     }
 
-    /// Create a production config
+    /// Create a production config with default bootstrap nodes
     pub fn production() -> Self {
         Self {
             listen_addrs: vec![
                 "/ip4/0.0.0.0/tcp/9000".to_string(),
                 "/ip6/::/tcp/9000".to_string(),
             ],
-            bootstrap_peers: vec![],
+            bootstrap_peers: DEFAULT_BOOTSTRAP_NODES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             consensus_topic: "platform/consensus/1.0.0".to_string(),
             challenge_topic: "platform/challenge/1.0.0".to_string(),
             netuid: 100,

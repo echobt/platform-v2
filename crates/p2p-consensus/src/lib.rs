@@ -42,7 +42,7 @@ pub mod state;
 pub mod validator;
 
 // Re-export main types
-pub use config::P2PConfig;
+pub use config::{P2PConfig, DEFAULT_BOOTSTRAP_NODES};
 pub use consensus::{ConsensusDecision, ConsensusEngine, ConsensusError, ConsensusPhase};
 pub use messages::{
     CommitMessage, ConsensusProposal, EvaluationMessage, EvaluationMetrics, HeartbeatMessage,
