@@ -1,6 +1,10 @@
 # =============================================================================
-# Platform Network - Unified Docker Image
+# Platform Network - Unified Docker Image (Centralized Mode)
 # =============================================================================
+# NOTE: This Dockerfile builds the centralized validator which requires
+# chain.platform.network. For decentralized P2P mode, use:
+#   validator-decentralized --data-dir /data --listen-addr /ip4/0.0.0.0/tcp/9000
+#
 # Single image that can run as either server or validator mode:
 #   docker run platform server [OPTIONS]
 #   docker run platform validator --secret-key <KEY> [OPTIONS]
@@ -82,8 +86,9 @@ RUN mkdir -p /data && chmod 777 /data
 
 # Default: run validator-node (reads VALIDATOR_SECRET_KEY from env)
 # Validators can use their existing docker-compose without changes
+# Note: In P2P mode, use validator-decentralized instead
 ENTRYPOINT ["validator-node"]
-CMD ["--data-dir", "/data", "--platform-server", "https://chain.platform.network"]
+CMD ["--data-dir", "/data"]
 
 # Labels
 LABEL org.opencontainers.image.source="https://github.com/PlatformNetwork/platform"

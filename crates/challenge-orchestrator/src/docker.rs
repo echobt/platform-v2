@@ -883,11 +883,13 @@ impl DockerClient {
                 })
             });
 
-        // Pass Platform URL for metagraph verification and API calls
-        // Default to public platform-server URL so validators don't need extra config
+        // In P2P mode, challenges communicate via libp2p, not HTTP
+        // PLATFORM_PUBLIC_URL is only needed for centralized/hybrid mode
         let platform_url = std::env::var("PLATFORM_PUBLIC_URL")
-            .unwrap_or_else(|_| "https://chain.platform.network".to_string());
-        env.push(format!("PLATFORM_URL={}", platform_url));
+            .unwrap_or_else(|_| String::new());
+        if !platform_url.is_empty() {
+            env.push(format!("PLATFORM_URL={}", platform_url));
+        }
 
         // Pass Container Broker WebSocket URL for secure container spawning
         // Challenges connect to this broker instead of using Docker socket directly
