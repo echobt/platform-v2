@@ -988,8 +988,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         assert_eq!(network.local_hotkey(), expected_hotkey);
     }
@@ -1001,8 +1001,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         assert_eq!(network.connected_peer_count(), 0);
     }
@@ -1014,8 +1014,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         // Should return false when requiring any peers (since none connected)
         assert!(!network.has_min_peers(1));
@@ -1032,8 +1032,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([42u8; 32]);
         let nonce = 12345u64;
@@ -1064,7 +1064,10 @@ mod tests {
         // Same nonce for different signer should succeed
         let other_signer = Hotkey([99u8; 32]);
         let result4 = network.check_replay(&other_signer, nonce);
-        assert!(result4.is_ok(), "Same nonce for different signer should succeed");
+        assert!(
+            result4.is_ok(),
+            "Same nonce for different signer should succeed"
+        );
     }
 
     #[tokio::test]
@@ -1074,8 +1077,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([42u8; 32]);
 
@@ -1097,8 +1100,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([42u8; 32]);
 
@@ -1132,15 +1135,21 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([42u8; 32]);
 
         // Add some nonces
-        network.check_replay(&signer, 1).expect("First nonce should succeed");
-        network.check_replay(&signer, 2).expect("Second nonce should succeed");
-        network.check_replay(&signer, 3).expect("Third nonce should succeed");
+        network
+            .check_replay(&signer, 1)
+            .expect("First nonce should succeed");
+        network
+            .check_replay(&signer, 2)
+            .expect("Second nonce should succeed");
+        network
+            .check_replay(&signer, 3)
+            .expect("Third nonce should succeed");
 
         // Verify nonces are tracked
         {
@@ -1169,14 +1178,18 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([42u8; 32]);
 
         // Add some nonces
-        network.check_replay(&signer, 100).expect("Nonce should succeed");
-        network.check_replay(&signer, 200).expect("Nonce should succeed");
+        network
+            .check_replay(&signer, 100)
+            .expect("Nonce should succeed");
+        network
+            .check_replay(&signer, 200)
+            .expect("Nonce should succeed");
 
         // Clean with large max_age should preserve recent nonces
         network.clean_old_nonces(3600); // 1 hour
@@ -1201,8 +1214,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         let signer = Hotkey([42u8; 32]);
 
@@ -1253,11 +1266,16 @@ mod tests {
         });
 
         // Sign the message
-        let signed = network.sign_message(message.clone()).expect("Signing should succeed");
+        let signed = network
+            .sign_message(message.clone())
+            .expect("Signing should succeed");
 
         // Verify signed message has correct fields
         assert_eq!(signed.signer, keypair.hotkey());
-        assert!(!signed.signature.is_empty(), "Signature should not be empty");
+        assert!(
+            !signed.signature.is_empty(),
+            "Signature should not be empty"
+        );
         assert!(signed.nonce > 0, "Nonce should be positive");
 
         // Verify the signature is valid
@@ -1288,7 +1306,9 @@ mod tests {
             signature: vec![],
         });
 
-        let mut signed = network.sign_message(message).expect("Signing should succeed");
+        let mut signed = network
+            .sign_message(message)
+            .expect("Signing should succeed");
 
         // Tamper with the signature
         if !signed.signature.is_empty() {
@@ -1324,7 +1344,9 @@ mod tests {
             signature: vec![],
         });
 
-        let mut signed = network.sign_message(message).expect("Signing should succeed");
+        let mut signed = network
+            .sign_message(message)
+            .expect("Signing should succeed");
 
         // Change the signer to someone else (signature won't match)
         signed.signer = other_keypair.hotkey();
@@ -1365,8 +1387,12 @@ mod tests {
             signature: vec![],
         });
 
-        let signed1 = network.sign_message(message1).expect("Signing should succeed");
-        let signed2 = network.sign_message(message2).expect("Signing should succeed");
+        let signed1 = network
+            .sign_message(message1)
+            .expect("Signing should succeed");
+        let signed2 = network
+            .sign_message(message2)
+            .expect("Signing should succeed");
 
         // Nonces should be incrementing
         assert!(
@@ -1389,7 +1415,9 @@ mod tests {
         assert!(dht_err.to_string().contains("DHT error"));
 
         let serialization_err = NetworkError::Serialization("invalid format".to_string());
-        assert!(serialization_err.to_string().contains("Serialization error"));
+        assert!(serialization_err
+            .to_string()
+            .contains("Serialization error"));
 
         let no_peers_err = NetworkError::NoPeers;
         assert!(no_peers_err.to_string().contains("Not connected"));
@@ -1463,8 +1491,8 @@ mod tests {
         let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
         let (tx, _rx) = mpsc::channel(100);
 
-        let network = P2PNetwork::new(keypair, config, validator_set, tx)
-            .expect("Failed to create network");
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
 
         // Initially zero
         assert_eq!(network.connected_peer_count(), 0);

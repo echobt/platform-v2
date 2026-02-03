@@ -1273,7 +1273,7 @@ mod tests {
         // Verify inner() returns a valid reference by using it for a get operation
         let key = StorageKey::new("test-ns", "test-key");
         let result = store.inner().get(&key, GetOptions::default()).await;
-        
+
         // Should not error, just return None for non-existent key
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -1311,9 +1311,18 @@ mod tests {
             .expect("Failed to store gamma");
 
         // Each store should only see its own submissions
-        let list_alpha = store_alpha.list_submissions(10).await.expect("Failed to list alpha");
-        let list_beta = store_beta.list_submissions(10).await.expect("Failed to list beta");
-        let list_gamma = store_gamma.list_submissions(10).await.expect("Failed to list gamma");
+        let list_alpha = store_alpha
+            .list_submissions(10)
+            .await
+            .expect("Failed to list alpha");
+        let list_beta = store_beta
+            .list_submissions(10)
+            .await
+            .expect("Failed to list beta");
+        let list_gamma = store_gamma
+            .list_submissions(10)
+            .await
+            .expect("Failed to list gamma");
 
         assert_eq!(list_alpha.len(), 1);
         assert_eq!(list_beta.len(), 1);
@@ -1348,7 +1357,10 @@ mod tests {
 
         // Verification should fail with corrupted leaf hash
         let is_valid = store.verify_submission(&hash, &corrupted_proof).await;
-        assert!(!is_valid, "Verification should fail with corrupted leaf_hash");
+        assert!(
+            !is_valid,
+            "Verification should fail with corrupted leaf_hash"
+        );
     }
 
     #[tokio::test]
@@ -1407,21 +1419,39 @@ mod tests {
         let sub_a = create_test_submission("challenge-1", "miner-a");
         let sub_b = create_test_submission("challenge-1", "miner-b");
 
-        store1.store_submission(&sub_a.submission_hash, &sub_a).await.expect("Failed to store");
-        store1.store_submission(&sub_b.submission_hash, &sub_b).await.expect("Failed to store");
+        store1
+            .store_submission(&sub_a.submission_hash, &sub_a)
+            .await
+            .expect("Failed to store");
+        store1
+            .store_submission(&sub_b.submission_hash, &sub_b)
+            .await
+            .expect("Failed to store");
 
-        store2.store_submission(&sub_a.submission_hash, &sub_a).await.expect("Failed to store");
-        store2.store_submission(&sub_b.submission_hash, &sub_b).await.expect("Failed to store");
+        store2
+            .store_submission(&sub_a.submission_hash, &sub_a)
+            .await
+            .expect("Failed to store");
+        store2
+            .store_submission(&sub_b.submission_hash, &sub_b)
+            .await
+            .expect("Failed to store");
 
         // State roots should be identical
         let root1 = store1.compute_state_root().await;
         let root2 = store2.compute_state_root().await;
 
-        assert_eq!(root1, root2, "State roots should be deterministic for same data");
+        assert_eq!(
+            root1, root2,
+            "State roots should be deterministic for same data"
+        );
 
         // Compute multiple times should yield same result
         let root1_again = store1.compute_state_root().await;
-        assert_eq!(root1, root1_again, "State root should be consistent across calls");
+        assert_eq!(
+            root1, root1_again,
+            "State root should be consistent across calls"
+        );
     }
 
     #[tokio::test]
@@ -1439,7 +1469,10 @@ mod tests {
             .await
             .expect("Failed to get evaluations");
 
-        assert!(evals.is_empty(), "Should return empty vec for non-existent submission");
+        assert!(
+            evals.is_empty(),
+            "Should return empty vec for non-existent submission"
+        );
     }
 
     #[tokio::test]
@@ -1453,7 +1486,10 @@ mod tests {
 
         // Store weights at epoch 100
         let weights = create_test_weights("challenge-1", 100);
-        store.store_weights(100, &weights).await.expect("Failed to store");
+        store
+            .store_weights(100, &weights)
+            .await
+            .expect("Failed to store");
 
         // Query for non-existent epochs
         let result_50 = store.get_weights(50).await.expect("Failed to get");
@@ -1498,7 +1534,10 @@ mod tests {
         assert_eq!(submissions.len(), 5, "Should have 5 submissions");
 
         // Verify all miners are present
-        let retrieved_miners: Vec<&str> = submissions.iter().map(|s| s.miner_hotkey.as_str()).collect();
+        let retrieved_miners: Vec<&str> = submissions
+            .iter()
+            .map(|s| s.miner_hotkey.as_str())
+            .collect();
         for miner in &miners {
             assert!(
                 retrieved_miners.contains(miner),
@@ -1544,8 +1583,14 @@ mod tests {
             .await
             .expect("Failed to get");
 
-        assert!(from_second.is_some(), "Should find submission from second reference");
-        assert!(from_third.is_some(), "Should find submission from third reference");
+        assert!(
+            from_second.is_some(),
+            "Should find submission from second reference"
+        );
+        assert!(
+            from_third.is_some(),
+            "Should find submission from third reference"
+        );
 
         // Different challenge should be isolated
         let store2 = registry.get_or_create("challenge-2").await;
@@ -1553,7 +1598,10 @@ mod tests {
             .get_submission(&sub.submission_hash)
             .await
             .expect("Failed to get");
-        assert!(from_different.is_none(), "Different challenge should not have the submission");
+        assert!(
+            from_different.is_none(),
+            "Different challenge should not have the submission"
+        );
     }
 
     #[test]
@@ -1577,7 +1625,10 @@ mod tests {
 
         // Root should be hash of the two leaves
         let expected = hash_pair(&leaf1, &leaf2);
-        assert_eq!(root, expected, "Root of 2 leaves should be hash_pair of them");
+        assert_eq!(
+            root, expected,
+            "Root of 2 leaves should be hash_pair of them"
+        );
     }
 
     #[test]
@@ -1595,7 +1646,10 @@ mod tests {
         let level1_right = hash_pair(&leaf3, &leaf3); // odd leaf duplicated
         let expected = hash_pair(&level1_left, &level1_right);
 
-        assert_eq!(root, expected, "Root of 3 leaves should follow odd-leaf duplication rule");
+        assert_eq!(
+            root, expected,
+            "Root of 3 leaves should follow odd-leaf duplication rule"
+        );
     }
 
     #[test]
@@ -1613,7 +1667,10 @@ mod tests {
         let level1_right = hash_pair(&leaf3, &leaf4);
         let expected = hash_pair(&level1_left, &level1_right);
 
-        assert_eq!(root, expected, "Root of 4 leaves should be balanced tree hash");
+        assert_eq!(
+            root, expected,
+            "Root of 4 leaves should be balanced tree hash"
+        );
     }
 
     #[test]
@@ -1633,7 +1690,10 @@ mod tests {
         // Different inputs should produce different result
         let c = hash_bytes(b"data-c");
         let result_ac = hash_pair(&a, &c);
-        assert_ne!(result1, result_ac, "Different inputs should produce different hash");
+        assert_ne!(
+            result1, result_ac,
+            "Different inputs should produce different hash"
+        );
     }
 
     #[test]
@@ -1648,9 +1708,18 @@ mod tests {
         assert!(proof.verify(data), "Original data should verify");
 
         // Different data should not verify
-        assert!(!proof.verify(b"different data"), "Different data should not verify");
-        assert!(!proof.verify(b"original dat"), "Partial data should not verify");
-        assert!(!proof.verify(b"original data!"), "Extended data should not verify");
+        assert!(
+            !proof.verify(b"different data"),
+            "Different data should not verify"
+        );
+        assert!(
+            !proof.verify(b"original dat"),
+            "Partial data should not verify"
+        );
+        assert!(
+            !proof.verify(b"original data!"),
+            "Extended data should not verify"
+        );
         assert!(!proof.verify(b""), "Empty data should not verify");
     }
 
@@ -1665,11 +1734,16 @@ mod tests {
 
         // inner() should return the underlying store
         let inner = registry.inner();
-        
+
         // Use the inner store directly
         let key = StorageKey::new("direct-ns", "direct-key");
-        let put_result = inner.put(key.clone(), b"direct-value".to_vec(), PutOptions::default()).await;
-        assert!(put_result.is_ok(), "Should be able to use inner store directly");
+        let put_result = inner
+            .put(key.clone(), b"direct-value".to_vec(), PutOptions::default())
+            .await;
+        assert!(
+            put_result.is_ok(),
+            "Should be able to use inner store directly"
+        );
 
         let get_result = inner.get(&key, GetOptions::default()).await;
         assert!(get_result.is_ok(), "Should be able to get from inner store");

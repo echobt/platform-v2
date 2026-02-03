@@ -655,7 +655,13 @@ mod tests {
         ));
 
         let first = rx.recv().await.unwrap();
-        assert!(matches!(first, BlockSyncEvent::NewBlock { block_number: 999, .. }));
+        assert!(matches!(
+            first,
+            BlockSyncEvent::NewBlock {
+                block_number: 999,
+                ..
+            }
+        ));
 
         // No Reconnected event should be sent since was_disconnected is false
         assert!(rx.try_recv().is_err());

@@ -1027,15 +1027,19 @@ mod tests {
             .expect("put 1 failed");
 
         // Should succeed with correct version
-        let mut options = PutOptions::default();
-        options.expected_version = Some(1);
+        let options = PutOptions {
+            expected_version: Some(1),
+            ..Default::default()
+        };
 
         let result = storage.put(key.clone(), b"v2".to_vec(), options).await;
         assert!(result.is_ok());
 
         // Should fail with wrong version
-        let mut options = PutOptions::default();
-        options.expected_version = Some(1); // Still expecting 1, but it's now 2
+        let options = PutOptions {
+            expected_version: Some(1), // Still expecting 1, but it's now 2
+            ..Default::default()
+        };
 
         let result = storage.put(key.clone(), b"v3".to_vec(), options).await;
         assert!(matches!(result, Err(StorageError::Conflict(_))));
@@ -1625,8 +1629,10 @@ mod tests {
         let storage = create_test_storage();
 
         let key = StorageKey::new("test", "ttl-key");
-        let mut options = PutOptions::default();
-        options.ttl_seconds = 1; // 1 second TTL
+        let options = PutOptions {
+            ttl_seconds: 1, // 1 second TTL
+            ..Default::default()
+        };
 
         storage
             .put(key.clone(), b"expires-soon".to_vec(), options)
@@ -1757,7 +1763,11 @@ mod tests {
         for i in 0..3 {
             let key = StorageKey::new("test", format!("key{:02}", i));
             storage
-                .put(key, format!("value{}", i).into_bytes(), PutOptions::default())
+                .put(
+                    key,
+                    format!("value{}", i).into_bytes(),
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put failed");
         }
@@ -1832,7 +1842,12 @@ mod tests {
         for i in 0..10 {
             let key = StorageKey::new("submissions", format!("hash-{:02}", i));
             storage
-                .put_with_block(key, format!("data-{}", i).into_bytes(), i * 10, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", i).into_bytes(),
+                    i * 10,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1889,7 +1904,12 @@ mod tests {
         for block in [10, 20, 30, 40, 50, 60, 70] {
             let key = StorageKey::new("combined", format!("hash-{}", block));
             storage
-                .put_with_block(key, format!("data-{}", block).into_bytes(), block, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1914,7 +1934,12 @@ mod tests {
         for i in 0..20 {
             let key = StorageKey::new("cursor-test", format!("hash-{:02}", i));
             storage
-                .put_with_block(key, format!("data-{}", i).into_bytes(), i * 10, PutOptions::default())
+                .put_with_block(
+                    key,
+                    format!("data-{}", i).into_bytes(),
+                    i * 10,
+                    PutOptions::default(),
+                )
                 .await
                 .expect("put_with_block failed");
         }
@@ -1968,8 +1993,10 @@ mod tests {
         // Add some keys that don't need replication (local_only)
         for i in 0..2 {
             let key = StorageKey::new("repl", format!("local-only-{}", i));
-            let mut options = PutOptions::default();
-            options.local_only = true;
+            let options = PutOptions {
+                local_only: true,
+                ..Default::default()
+            };
             storage
                 .put(key, b"local-data".to_vec(), options)
                 .await
