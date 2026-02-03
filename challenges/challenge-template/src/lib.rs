@@ -289,7 +289,8 @@ impl TemplateChallenge {
 
         // Example: Check for deprecated field usage
         if data.get("legacy_field").is_some() {
-            warnings.push("Field 'legacy_field' is deprecated, use 'new_field' instead".to_string());
+            warnings
+                .push("Field 'legacy_field' is deprecated, use 'new_field' instead".to_string());
         }
 
         // Example: Type checking (customize for your needs)
@@ -386,7 +387,11 @@ impl ServerChallenge for TemplateChallenge {
             "metadata_provided": request.metadata.is_some(),
         });
 
-        Ok(EvaluationResponse::success(&request.request_id, score, results))
+        Ok(EvaluationResponse::success(
+            &request.request_id,
+            score,
+            results,
+        ))
     }
 
     /// Validate submission data without full evaluation.
@@ -504,7 +509,10 @@ mod tests {
         let challenge = TemplateChallenge::new();
         let request = create_test_request("test-001");
 
-        let response = challenge.evaluate(request).await.expect("evaluation should succeed");
+        let response = challenge
+            .evaluate(request)
+            .await
+            .expect("evaluation should succeed");
 
         assert!(response.success);
         assert_eq!(response.request_id, "test-001");
@@ -525,7 +533,10 @@ mod tests {
             deadline: None,
         };
 
-        let response = challenge.evaluate(request).await.expect("evaluation should succeed");
+        let response = challenge
+            .evaluate(request)
+            .await
+            .expect("evaluation should succeed");
 
         assert!(response.success);
         // Base score only (0.5)
@@ -545,7 +556,10 @@ mod tests {
             deadline: None,
         };
 
-        let response = challenge.evaluate(request).await.expect("evaluation should succeed");
+        let response = challenge
+            .evaluate(request)
+            .await
+            .expect("evaluation should succeed");
 
         assert!(response.success);
         // Base (0.5) + max bonus (0.5) = 1.0
@@ -565,7 +579,10 @@ mod tests {
             deadline: None,
         };
 
-        let response = challenge.evaluate(request).await.expect("evaluation should succeed");
+        let response = challenge
+            .evaluate(request)
+            .await
+            .expect("evaluation should succeed");
 
         assert!(response.success);
         // Should be clamped to 1.0
@@ -579,7 +596,10 @@ mod tests {
             data: json!({"bonus": 0.3}),
         };
 
-        let response = challenge.validate(request).await.expect("validation should succeed");
+        let response = challenge
+            .validate(request)
+            .await
+            .expect("validation should succeed");
 
         assert!(response.valid);
         assert!(response.errors.is_empty());
@@ -590,7 +610,10 @@ mod tests {
         let challenge = TemplateChallenge::new();
         let request = ValidationRequest { data: json!(null) };
 
-        let response = challenge.validate(request).await.expect("validation should succeed");
+        let response = challenge
+            .validate(request)
+            .await
+            .expect("validation should succeed");
 
         assert!(!response.valid);
         assert!(!response.errors.is_empty());
@@ -602,7 +625,10 @@ mod tests {
         let challenge = TemplateChallenge::new();
         let request = ValidationRequest { data: json!({}) };
 
-        let response = challenge.validate(request).await.expect("validation should succeed");
+        let response = challenge
+            .validate(request)
+            .await
+            .expect("validation should succeed");
 
         assert!(!response.valid);
         assert!(response.errors[0].contains("empty"));
@@ -615,7 +641,10 @@ mod tests {
             data: json!({"bonus": "not a number"}),
         };
 
-        let response = challenge.validate(request).await.expect("validation should succeed");
+        let response = challenge
+            .validate(request)
+            .await
+            .expect("validation should succeed");
 
         assert!(!response.valid);
         assert!(response.errors[0].contains("number"));
@@ -628,7 +657,10 @@ mod tests {
             data: json!({"legacy_field": "old value", "valid": true}),
         };
 
-        let response = challenge.validate(request).await.expect("validation should succeed");
+        let response = challenge
+            .validate(request)
+            .await
+            .expect("validation should succeed");
 
         assert!(response.valid);
         assert!(!response.warnings.is_empty());
@@ -667,8 +699,20 @@ mod tests {
         state.record_score("participant-2", 0.7);
 
         assert_eq!(state.evaluation_count, 3);
-        assert_eq!(state.participant_scores.get("participant-1").map(|v| v.len()), Some(2));
-        assert_eq!(state.participant_scores.get("participant-2").map(|v| v.len()), Some(1));
+        assert_eq!(
+            state
+                .participant_scores
+                .get("participant-1")
+                .map(|v| v.len()),
+            Some(2)
+        );
+        assert_eq!(
+            state
+                .participant_scores
+                .get("participant-2")
+                .map(|v| v.len()),
+            Some(1)
+        );
     }
 
     #[test]
@@ -678,7 +722,9 @@ mod tests {
         state.record_score("participant-1", 0.8);
         state.record_score("participant-1", 0.6);
 
-        let avg = state.get_average_score("participant-1").expect("participant should exist");
+        let avg = state
+            .get_average_score("participant-1")
+            .expect("participant should exist");
         assert!((avg - 0.7).abs() < f64::EPSILON);
 
         assert!(state.get_average_score("unknown").is_none());
@@ -714,7 +760,10 @@ mod tests {
 
         // Perform some evaluations
         let request = create_test_request("test-checkpoint");
-        challenge.evaluate(request).await.expect("evaluation should succeed");
+        challenge
+            .evaluate(request)
+            .await
+            .expect("evaluation should succeed");
 
         // Create checkpoint
         let checkpoint = challenge.checkpoint().await;
@@ -738,7 +787,9 @@ mod tests {
         let challenge = TemplateChallenge::with_config(config);
         let challenge_config = challenge.config();
 
-        assert!(challenge_config.features.contains(&"custom_feature".to_string()));
+        assert!(challenge_config
+            .features
+            .contains(&"custom_feature".to_string()));
     }
 
     #[tokio::test]
@@ -764,7 +815,10 @@ mod tests {
             .collect();
 
         for handle in handles {
-            let result = handle.await.expect("task should complete").expect("evaluation should succeed");
+            let result = handle
+                .await
+                .expect("task should complete")
+                .expect("evaluation should succeed");
             assert!(result.success);
         }
 

@@ -780,8 +780,7 @@ mod tests {
 
         for status in statuses {
             let json = serde_json::to_string(&status).expect("serialize");
-            let restored: ChallengeReloadStatus =
-                serde_json::from_str(&json).expect("deserialize");
+            let restored: ChallengeReloadStatus = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(status, restored);
         }
     }
@@ -870,9 +869,7 @@ mod tests {
     async fn test_complete_update_not_found() {
         let (manager, _dir) = create_test_manager();
 
-        let result = manager
-            .complete_update("nonexistent", "2.0.0", 0, 0)
-            .await;
+        let result = manager.complete_update("nonexistent", "2.0.0", 0, 0).await;
         assert!(matches!(result, Err(HotReloadError::ChallengeNotFound(_))));
     }
 

@@ -262,10 +262,7 @@ impl RecoveryManager {
                 challenge_id,
                 reason,
             } => {
-                warn!(
-                    "Rolling back challenge {} update: {}",
-                    challenge_id, reason
-                );
+                warn!("Rolling back challenge {} update: {}", challenge_id, reason);
                 (
                     true,
                     format!("Challenge {} rollback initiated: {}", challenge_id, reason),

@@ -1113,7 +1113,7 @@ mod tests {
         assert_eq!(eval_state.request_id, "req-123");
         assert_eq!(eval_state.participant_id, "participant-456");
         assert_eq!(eval_state.progress, 75);
-        
+
         // Parse the data as JSON to verify
         let parsed: serde_json::Value = serde_json::from_str(&eval_state.data).unwrap();
         assert_eq!(parsed["score"], 100);
@@ -1312,7 +1312,13 @@ mod tests {
         let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
 
         let id = manager
-            .create_challenge_snapshot("challenge_to_delete", "1.0.0", vec![1, 2, 3], vec![], "test")
+            .create_challenge_snapshot(
+                "challenge_to_delete",
+                "1.0.0",
+                vec![1, 2, 3],
+                vec![],
+                "test",
+            )
             .unwrap();
 
         assert_eq!(manager.list_challenge_snapshots(None).len(), 1);
@@ -1386,10 +1392,22 @@ mod tests {
         {
             let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
             id1 = manager
-                .create_challenge_snapshot("persistent_challenge", "1.0.0", vec![10, 20, 30], vec![], "persist_test")
+                .create_challenge_snapshot(
+                    "persistent_challenge",
+                    "1.0.0",
+                    vec![10, 20, 30],
+                    vec![],
+                    "persist_test",
+                )
                 .unwrap();
             id2 = manager
-                .create_challenge_snapshot("persistent_challenge", "1.1.0", vec![40, 50], vec![], "persist_test_2")
+                .create_challenge_snapshot(
+                    "persistent_challenge",
+                    "1.1.0",
+                    vec![40, 50],
+                    vec![],
+                    "persist_test_2",
+                )
                 .unwrap();
         }
 
@@ -1484,7 +1502,13 @@ mod tests {
         let large_state: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
 
         let id = manager
-            .create_challenge_snapshot("large_challenge", "1.0.0", large_state.clone(), vec![], "large_test")
+            .create_challenge_snapshot(
+                "large_challenge",
+                "1.0.0",
+                large_state.clone(),
+                vec![],
+                "large_test",
+            )
             .unwrap();
 
         let snapshots = manager.list_challenge_snapshots(Some("large_challenge"));
@@ -1519,7 +1543,9 @@ mod tests {
         assert_eq!(versions, vec!["1.0.0", "1.0.1", "1.1.0", "2.0.0"]);
 
         // Latest should be 2.0.0
-        let latest = manager.latest_challenge_snapshot("versioned_challenge").unwrap();
+        let latest = manager
+            .latest_challenge_snapshot("versioned_challenge")
+            .unwrap();
         assert_eq!(latest.crate_version, "2.0.0");
     }
 
