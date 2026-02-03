@@ -77,6 +77,8 @@
 // MODULES
 // ============================================================================
 
+/// Challenge crate interface for hot-reload support
+pub mod crate_interface;
 /// Data types and utilities
 pub mod data;
 /// Database utilities
@@ -106,6 +108,7 @@ pub mod weights;
 // EXPORTS
 // ============================================================================
 
+pub use crate_interface::*;
 pub use decentralized::run_decentralized;
 pub use p2p_client::{
     P2PChallengeClient, P2PChallengeConfig, P2PChallengeMessage, PendingSubmission,
