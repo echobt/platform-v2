@@ -45,8 +45,11 @@ impl TestValidator {
             let _ = validator_set.register_validator(record);
         }
 
-        let consensus_engine =
-            ConsensusEngine::new(keypair.clone(), validator_set.clone(), state_manager.clone());
+        let consensus_engine = ConsensusEngine::new(
+            keypair.clone(),
+            validator_set.clone(),
+            state_manager.clone(),
+        );
 
         Self {
             keypair,
@@ -373,7 +376,8 @@ async fn test_leader_election_rotation() {
         let leader_view_n = leaders_by_view.get(&view).unwrap();
         let leader_view_n_plus_4 = leaders_by_view.get(&(view + 4)).unwrap();
         assert_eq!(
-            leader_view_n, leader_view_n_plus_4,
+            leader_view_n,
+            leader_view_n_plus_4,
             "Leader for view {} should match view {} (rotation period = {})",
             view,
             view + 4,
@@ -469,10 +473,13 @@ async fn test_state_synchronization() {
 
     // Verify the update was applied
     for validator in &validators {
-        let has_validator = validator.state_manager.read(|state| {
-            state.validators.contains_key(&hotkey_to_add)
-        });
-        assert!(has_validator, "All validators should have the new validator entry");
+        let has_validator = validator
+            .state_manager
+            .read(|state| state.validators.contains_key(&hotkey_to_add));
+        assert!(
+            has_validator,
+            "All validators should have the new validator entry"
+        );
     }
 }
 
@@ -482,8 +489,8 @@ async fn test_state_synchronization() {
 
 #[tokio::test]
 async fn test_score_aggregation_consensus() {
-    use platform_p2p_consensus::{EvaluationRecord, ValidatorEvaluation};
     use platform_core::ChallengeId;
+    use platform_p2p_consensus::{EvaluationRecord, ValidatorEvaluation};
 
     // Create validators
     let validators = create_test_validators(TEST_VALIDATOR_COUNT);
@@ -660,7 +667,10 @@ fn test_mock_metagraph_builder() {
         .add_neurons(validators)
         .build();
 
-    assert_eq!(metagraph.netuid, netuid, "Metagraph should have correct netuid");
+    assert_eq!(
+        metagraph.netuid, netuid,
+        "Metagraph should have correct netuid"
+    );
     assert_eq!(metagraph.n, 4, "Metagraph should have 4 neurons");
     assert_eq!(metagraph.block, 1000, "Metagraph should have correct block");
 
@@ -712,7 +722,7 @@ async fn test_consensus_quorum_edge_cases() {
 #[tokio::test]
 async fn test_view_change_with_quorum() {
     let validators = create_test_validators(TEST_VALIDATOR_COUNT);
-    
+
     // All validators initiate view change to view 1
     let mut view_change_messages = Vec::new();
     for validator in &validators {
@@ -746,7 +756,7 @@ async fn test_view_change_with_quorum() {
     let view_0_leader = leader_election
         .leader_for_view(0)
         .expect("Should have leader for view 0");
-    
+
     assert_ne!(
         expected_leader, view_0_leader,
         "Leader should change between view 0 and view 1"
