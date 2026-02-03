@@ -599,4 +599,118 @@ mod tests {
         let evt = rx.recv().await.unwrap();
         assert!(matches!(evt, BlockSyncEvent::Disconnected(_)));
     }
+
+    #[test]
+    fn test_block_sync_config_custom_values() {
+        let config = BlockSyncConfig {
+            netuid: 99,
+            channel_capacity: 512,
+        };
+        assert_eq!(config.netuid, 99);
+        assert_eq!(config.channel_capacity, 512);
+    }
+
+    #[test]
+    fn test_block_sync_is_connected_false_initially() {
+        let sync = BlockSync::new(BlockSyncConfig::default());
+        assert!(!sync.is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_block_sync_tempo_returns_default_360() {
+        let sync = BlockSync::new(BlockSyncConfig::default());
+        let tempo = sync.tempo().await;
+        assert_eq!(tempo, 360);
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_new_block_updates_state_no_reconnect() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let current_block = Arc::new(RwLock::new(50));
+        let current_epoch = Arc::new(RwLock::new(1));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::CommitWindow));
+        let mut was_disconnected = false;
+
+        let epoch_info = sample_epoch_info(999, 15, EpochPhase::RevealWindow);
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::NewBlock {
+                block_number: 999,
+                epoch_info: epoch_info.clone(),
+            },
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(!should_break);
+        assert_eq!(*current_block.read().await, 999);
+        assert_eq!(*current_epoch.read().await, 15);
+        assert!(matches!(
+            *current_phase.read().await,
+            EpochPhase::RevealWindow
+        ));
+
+        let first = rx.recv().await.unwrap();
+        assert!(matches!(
+            first,
+            BlockSyncEvent::NewBlock {
+                block_number: 999,
+                ..
+            }
+        ));
+
+        // No Reconnected event should be sent since was_disconnected is false
+        assert!(rx.try_recv().is_err());
+        assert!(!was_disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_event_phase_change_to_evaluation_no_window_events() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let current_block = Arc::new(RwLock::new(0));
+        let current_epoch = Arc::new(RwLock::new(0));
+        let current_phase = Arc::new(RwLock::new(EpochPhase::RevealWindow));
+        let mut was_disconnected = false;
+
+        let should_break = BlockSync::handle_block_event(
+            BlockEvent::PhaseChange {
+                block_number: 720,
+                old_phase: EpochPhase::RevealWindow,
+                new_phase: EpochPhase::Evaluation,
+                epoch: 3,
+            },
+            &tx,
+            &current_block,
+            &current_epoch,
+            &current_phase,
+            &mut was_disconnected,
+        )
+        .await;
+
+        assert!(!should_break);
+
+        // Only PhaseChange event should be emitted, no window open events for Evaluation
+        let phase_event = rx.recv().await.unwrap();
+        match phase_event {
+            BlockSyncEvent::PhaseChange {
+                block_number,
+                old_phase,
+                new_phase,
+                epoch,
+            } => {
+                assert_eq!(block_number, 720);
+                assert!(matches!(old_phase, EpochPhase::RevealWindow));
+                assert!(matches!(new_phase, EpochPhase::Evaluation));
+                assert_eq!(epoch, 3);
+            }
+            _ => panic!("Expected PhaseChange event"),
+        }
+
+        // No additional window events should be emitted for Evaluation phase
+        assert!(rx.try_recv().is_err());
+    }
 }

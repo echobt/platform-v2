@@ -924,4 +924,590 @@ mod tests {
         let peer_id = PeerId::random();
         assert!(mapping.get_hotkey(&peer_id).is_none());
     }
+
+    #[test]
+    fn test_peer_mapping_len() {
+        let mapping = PeerMapping::new();
+        assert_eq!(mapping.len(), 0);
+
+        let peer_id1 = PeerId::random();
+        let hotkey1 = Hotkey([1u8; 32]);
+        mapping.insert(peer_id1, hotkey1);
+        assert_eq!(mapping.len(), 1);
+
+        let peer_id2 = PeerId::random();
+        let hotkey2 = Hotkey([2u8; 32]);
+        mapping.insert(peer_id2, hotkey2);
+        assert_eq!(mapping.len(), 2);
+
+        mapping.remove_peer(&peer_id1);
+        assert_eq!(mapping.len(), 1);
+
+        mapping.remove_peer(&peer_id2);
+        assert_eq!(mapping.len(), 0);
+    }
+
+    #[test]
+    fn test_peer_mapping_is_empty() {
+        let mapping = PeerMapping::new();
+        assert!(mapping.is_empty());
+
+        let peer_id = PeerId::random();
+        let hotkey = Hotkey([1u8; 32]);
+        mapping.insert(peer_id, hotkey);
+        assert!(!mapping.is_empty());
+
+        mapping.remove_peer(&peer_id);
+        assert!(mapping.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_network_local_peer_id() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network = P2PNetwork::new(keypair.clone(), config, validator_set, tx)
+            .expect("Failed to create network");
+
+        // Verify that local_peer_id is derived correctly from keypair
+        let seed = keypair.seed();
+        let libp2p_keypair = libp2p::identity::Keypair::ed25519_from_bytes(seed)
+            .expect("Failed to create libp2p keypair");
+        let expected_peer_id = PeerId::from(libp2p_keypair.public());
+
+        assert_eq!(network.local_peer_id(), expected_peer_id);
+    }
+
+    #[tokio::test]
+    async fn test_network_local_hotkey() {
+        let keypair = Keypair::generate();
+        let expected_hotkey = keypair.hotkey();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        assert_eq!(network.local_hotkey(), expected_hotkey);
+    }
+
+    #[tokio::test]
+    async fn test_network_connected_peer_count_initially_zero() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        assert_eq!(network.connected_peer_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_network_has_min_peers_false_initially() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        // Should return false when requiring any peers (since none connected)
+        assert!(!network.has_min_peers(1));
+        assert!(!network.has_min_peers(5));
+
+        // Should return true for min_required of 0
+        assert!(network.has_min_peers(0));
+    }
+
+    #[tokio::test]
+    async fn test_replay_attack_detection() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        let signer = Hotkey([42u8; 32]);
+        let nonce = 12345u64;
+
+        // First check should succeed
+        let result1 = network.check_replay(&signer, nonce);
+        assert!(result1.is_ok(), "First nonce check should succeed");
+
+        // Second check with same nonce should fail (replay attack detected)
+        let result2 = network.check_replay(&signer, nonce);
+        assert!(result2.is_err(), "Duplicate nonce should be rejected");
+
+        match result2 {
+            Err(NetworkError::ReplayAttack {
+                signer: s,
+                nonce: n,
+            }) => {
+                assert_eq!(n, nonce);
+                assert_eq!(s, signer.to_hex());
+            }
+            _ => panic!("Expected ReplayAttack error"),
+        }
+
+        // Different nonce for same signer should succeed
+        let result3 = network.check_replay(&signer, nonce + 1);
+        assert!(result3.is_ok(), "Different nonce should succeed");
+
+        // Same nonce for different signer should succeed
+        let other_signer = Hotkey([99u8; 32]);
+        let result4 = network.check_replay(&other_signer, nonce);
+        assert!(
+            result4.is_ok(),
+            "Same nonce for different signer should succeed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiting_under_limit() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        let signer = Hotkey([42u8; 32]);
+
+        // Should allow messages under the limit (DEFAULT_RATE_LIMIT = 100)
+        for i in 0..50 {
+            let result = network.check_rate_limit(&signer);
+            assert!(
+                result.is_ok(),
+                "Message {} should be allowed under rate limit",
+                i
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiting_exceeds_limit() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        let signer = Hotkey([42u8; 32]);
+
+        // Send messages up to the limit (DEFAULT_RATE_LIMIT = 100)
+        for i in 0..DEFAULT_RATE_LIMIT {
+            let result = network.check_rate_limit(&signer);
+            assert!(
+                result.is_ok(),
+                "Message {} should be allowed at or under limit",
+                i
+            );
+        }
+
+        // Next message should be rate limited
+        let result = network.check_rate_limit(&signer);
+        assert!(result.is_err(), "Message over limit should be rejected");
+
+        match result {
+            Err(NetworkError::RateLimitExceeded { signer: s, count }) => {
+                assert_eq!(s, signer.to_hex());
+                assert_eq!(count, DEFAULT_RATE_LIMIT);
+            }
+            _ => panic!("Expected RateLimitExceeded error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clean_old_nonces() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        let signer = Hotkey([42u8; 32]);
+
+        // Add some nonces
+        network
+            .check_replay(&signer, 1)
+            .expect("First nonce should succeed");
+        network
+            .check_replay(&signer, 2)
+            .expect("Second nonce should succeed");
+        network
+            .check_replay(&signer, 3)
+            .expect("Third nonce should succeed");
+
+        // Verify nonces are tracked
+        {
+            let seen = network.seen_nonces.read();
+            let signer_nonces = seen.get(&signer).expect("Signer should have nonces");
+            assert_eq!(signer_nonces.len(), 3);
+        }
+
+        // Clean with 0 max_age_secs should remove all nonces (they're all "old")
+        network.clean_old_nonces(0);
+
+        // After cleaning with 0 age, all nonces should be removed
+        {
+            let seen = network.seen_nonces.read();
+            assert!(
+                seen.get(&signer).is_none() || seen.get(&signer).unwrap().is_empty(),
+                "All nonces should be cleaned with max_age of 0"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clean_old_nonces_preserves_recent() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        let signer = Hotkey([42u8; 32]);
+
+        // Add some nonces
+        network
+            .check_replay(&signer, 100)
+            .expect("Nonce should succeed");
+        network
+            .check_replay(&signer, 200)
+            .expect("Nonce should succeed");
+
+        // Clean with large max_age should preserve recent nonces
+        network.clean_old_nonces(3600); // 1 hour
+
+        // Nonces should still be there
+        {
+            let seen = network.seen_nonces.read();
+            let signer_nonces = seen.get(&signer);
+            assert!(signer_nonces.is_some(), "Signer should still have nonces");
+            assert_eq!(signer_nonces.unwrap().len(), 2, "Both nonces should remain");
+        }
+
+        // Same nonces should still be rejected (replay protection still works)
+        assert!(network.check_replay(&signer, 100).is_err());
+        assert!(network.check_replay(&signer, 200).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_clean_rate_limit_entries() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        let signer = Hotkey([42u8; 32]);
+
+        // Add some rate limit entries
+        network.check_rate_limit(&signer).expect("Should succeed");
+        network.check_rate_limit(&signer).expect("Should succeed");
+
+        // Verify entries exist
+        {
+            let timestamps = network.message_timestamps.read();
+            let queue = timestamps.get(&signer);
+            assert!(queue.is_some(), "Signer should have rate limit entries");
+            assert_eq!(queue.unwrap().len(), 2);
+        }
+
+        // Clean rate limit entries (should not remove recent entries)
+        network.clean_rate_limit_entries();
+
+        // Entries should still be there (they're recent)
+        {
+            let timestamps = network.message_timestamps.read();
+            let queue = timestamps.get(&signer);
+            assert!(queue.is_some(), "Recent entries should be preserved");
+            assert_eq!(queue.unwrap().len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_verify_message() {
+        use crate::messages::HeartbeatMessage;
+
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network = P2PNetwork::new(keypair.clone(), config, validator_set, tx)
+            .expect("Failed to create network");
+
+        // Create a test message using the HeartbeatMessage struct
+        let message = P2PMessage::Heartbeat(HeartbeatMessage {
+            validator: keypair.hotkey(),
+            state_hash: [0u8; 32],
+            sequence: 1,
+            stake: 1_000_000_000,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            signature: vec![],
+        });
+
+        // Sign the message
+        let signed = network
+            .sign_message(message.clone())
+            .expect("Signing should succeed");
+
+        // Verify signed message has correct fields
+        assert_eq!(signed.signer, keypair.hotkey());
+        assert!(
+            !signed.signature.is_empty(),
+            "Signature should not be empty"
+        );
+        assert!(signed.nonce > 0, "Nonce should be positive");
+
+        // Verify the signature is valid
+        assert!(
+            network.verify_message(&signed),
+            "Signature verification should pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_verify_message_rejects_invalid_signature() {
+        use crate::messages::HeartbeatMessage;
+
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network = P2PNetwork::new(keypair.clone(), config, validator_set, tx)
+            .expect("Failed to create network");
+
+        let message = P2PMessage::Heartbeat(HeartbeatMessage {
+            validator: keypair.hotkey(),
+            state_hash: [0u8; 32],
+            sequence: 1,
+            stake: 1_000_000_000,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            signature: vec![],
+        });
+
+        let mut signed = network
+            .sign_message(message)
+            .expect("Signing should succeed");
+
+        // Tamper with the signature
+        if !signed.signature.is_empty() {
+            signed.signature[0] ^= 0xFF;
+        }
+
+        // Verify should fail with tampered signature
+        assert!(
+            !network.verify_message(&signed),
+            "Tampered signature should fail verification"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_verify_message_rejects_wrong_signer() {
+        use crate::messages::HeartbeatMessage;
+
+        let keypair = Keypair::generate();
+        let other_keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network = P2PNetwork::new(keypair.clone(), config, validator_set, tx)
+            .expect("Failed to create network");
+
+        let message = P2PMessage::Heartbeat(HeartbeatMessage {
+            validator: keypair.hotkey(),
+            state_hash: [0u8; 32],
+            sequence: 1,
+            stake: 1_000_000_000,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            signature: vec![],
+        });
+
+        let mut signed = network
+            .sign_message(message)
+            .expect("Signing should succeed");
+
+        // Change the signer to someone else (signature won't match)
+        signed.signer = other_keypair.hotkey();
+
+        // Verify should fail with wrong signer
+        assert!(
+            !network.verify_message(&signed),
+            "Wrong signer should fail verification"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_message_increments_nonce() {
+        use crate::messages::HeartbeatMessage;
+
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network = P2PNetwork::new(keypair.clone(), config, validator_set, tx)
+            .expect("Failed to create network");
+
+        let message1 = P2PMessage::Heartbeat(HeartbeatMessage {
+            validator: keypair.hotkey(),
+            state_hash: [0u8; 32],
+            sequence: 1,
+            stake: 1_000_000_000,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            signature: vec![],
+        });
+        let message2 = P2PMessage::Heartbeat(HeartbeatMessage {
+            validator: keypair.hotkey(),
+            state_hash: [0u8; 32],
+            sequence: 2,
+            stake: 1_000_000_000,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            signature: vec![],
+        });
+
+        let signed1 = network
+            .sign_message(message1)
+            .expect("Signing should succeed");
+        let signed2 = network
+            .sign_message(message2)
+            .expect("Signing should succeed");
+
+        // Nonces should be incrementing
+        assert!(
+            signed2.nonce > signed1.nonce,
+            "Nonces should be monotonically increasing"
+        );
+    }
+
+    #[test]
+    fn test_network_error_display() {
+        // Test that NetworkError variants display correctly
+        let transport_err = NetworkError::Transport("connection failed".to_string());
+        assert!(transport_err.to_string().contains("Transport error"));
+        assert!(transport_err.to_string().contains("connection failed"));
+
+        let gossipsub_err = NetworkError::Gossipsub("publish failed".to_string());
+        assert!(gossipsub_err.to_string().contains("Gossipsub error"));
+
+        let dht_err = NetworkError::Dht("lookup failed".to_string());
+        assert!(dht_err.to_string().contains("DHT error"));
+
+        let serialization_err = NetworkError::Serialization("invalid format".to_string());
+        assert!(serialization_err
+            .to_string()
+            .contains("Serialization error"));
+
+        let no_peers_err = NetworkError::NoPeers;
+        assert!(no_peers_err.to_string().contains("Not connected"));
+
+        let channel_err = NetworkError::Channel("channel closed".to_string());
+        assert!(channel_err.to_string().contains("Channel error"));
+
+        let replay_err = NetworkError::ReplayAttack {
+            signer: "abc123".to_string(),
+            nonce: 42,
+        };
+        assert!(replay_err.to_string().contains("Replay attack"));
+        assert!(replay_err.to_string().contains("42"));
+        assert!(replay_err.to_string().contains("abc123"));
+
+        let rate_limit_err = NetworkError::RateLimitExceeded {
+            signer: "def456".to_string(),
+            count: 100,
+        };
+        assert!(rate_limit_err.to_string().contains("Rate limit exceeded"));
+        assert!(rate_limit_err.to_string().contains("100"));
+    }
+
+    #[test]
+    fn test_peer_mapping_multiple_operations() {
+        let mapping = PeerMapping::new();
+
+        // Insert multiple peers
+        let peers: Vec<_> = (0..5)
+            .map(|i| {
+                let peer_id = PeerId::random();
+                let mut hotkey_bytes = [0u8; 32];
+                hotkey_bytes[0] = i as u8;
+                let hotkey = Hotkey(hotkey_bytes);
+                (peer_id, hotkey)
+            })
+            .collect();
+
+        for (peer_id, hotkey) in &peers {
+            mapping.insert(*peer_id, hotkey.clone());
+        }
+
+        assert_eq!(mapping.len(), 5);
+        assert!(!mapping.is_empty());
+
+        // Verify all mappings
+        for (peer_id, hotkey) in &peers {
+            assert_eq!(mapping.get_hotkey(peer_id), Some(hotkey.clone()));
+            assert_eq!(mapping.get_peer(hotkey), Some(*peer_id));
+        }
+
+        // Remove some peers
+        mapping.remove_peer(&peers[0].0);
+        mapping.remove_peer(&peers[2].0);
+        mapping.remove_peer(&peers[4].0);
+
+        assert_eq!(mapping.len(), 2);
+
+        // Verify remaining mappings
+        assert!(mapping.get_hotkey(&peers[0].0).is_none());
+        assert!(mapping.get_hotkey(&peers[1].0).is_some());
+        assert!(mapping.get_hotkey(&peers[2].0).is_none());
+        assert!(mapping.get_hotkey(&peers[3].0).is_some());
+        assert!(mapping.get_hotkey(&peers[4].0).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_connected_peer_count_with_peer_mapping() {
+        let keypair = Keypair::generate();
+        let config = P2PConfig::development();
+        let validator_set = Arc::new(ValidatorSet::new(keypair.clone(), 0));
+        let (tx, _rx) = mpsc::channel(100);
+
+        let network =
+            P2PNetwork::new(keypair, config, validator_set, tx).expect("Failed to create network");
+
+        // Initially zero
+        assert_eq!(network.connected_peer_count(), 0);
+        assert!(!network.has_min_peers(1));
+
+        // Add some peers to the peer mapping
+        let peer_mapping = network.peer_mapping();
+        peer_mapping.insert(PeerId::random(), Hotkey([1u8; 32]));
+        peer_mapping.insert(PeerId::random(), Hotkey([2u8; 32]));
+        peer_mapping.insert(PeerId::random(), Hotkey([3u8; 32]));
+
+        // Count should reflect peer mapping
+        assert_eq!(network.connected_peer_count(), 3);
+        assert!(network.has_min_peers(1));
+        assert!(network.has_min_peers(3));
+        assert!(!network.has_min_peers(4));
+    }
 }

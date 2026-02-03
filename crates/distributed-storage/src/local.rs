@@ -1027,15 +1027,19 @@ mod tests {
             .expect("put 1 failed");
 
         // Should succeed with correct version
-        let mut options = PutOptions::default();
-        options.expected_version = Some(1);
+        let options = PutOptions {
+            expected_version: Some(1),
+            ..Default::default()
+        };
 
         let result = storage.put(key.clone(), b"v2".to_vec(), options).await;
         assert!(result.is_ok());
 
         // Should fail with wrong version
-        let mut options = PutOptions::default();
-        options.expected_version = Some(1); // Still expecting 1, but it's now 2
+        let options = PutOptions {
+            expected_version: Some(1), // Still expecting 1, but it's now 2
+            ..Default::default()
+        };
 
         let result = storage.put(key.clone(), b"v3".to_vec(), options).await;
         assert!(matches!(result, Err(StorageError::Conflict(_))));
@@ -1574,5 +1578,574 @@ mod tests {
             .await
             .expect("list_range failed");
         assert!(result.is_empty());
+    }
+
+    // =====================================================================
+    // Additional comprehensive tests
+    // =====================================================================
+
+    #[test]
+    fn test_node_id_returns_configured_value() {
+        let storage = LocalStorage::in_memory("my-custom-node-id".to_string())
+            .expect("Failed to create storage");
+        assert_eq!(storage.node_id(), "my-custom-node-id");
+
+        let storage2 =
+            LocalStorage::in_memory("another-node".to_string()).expect("Failed to create storage");
+        assert_eq!(storage2.node_id(), "another-node");
+    }
+
+    #[tokio::test]
+    async fn test_get_returns_none_for_nonexistent_key() {
+        let storage = create_test_storage();
+
+        let key = StorageKey::new("nonexistent", "missing-key");
+        let result = storage
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed");
+        assert!(result.is_none());
+
+        // Also test with a valid namespace but missing key
+        storage
+            .put(
+                StorageKey::new("test", "exists"),
+                b"value".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+
+        let key = StorageKey::new("test", "does-not-exist");
+        let result = storage
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ttl_expiration() {
+        let storage = create_test_storage();
+
+        let key = StorageKey::new("test", "ttl-key");
+        let options = PutOptions {
+            ttl_seconds: 1, // 1 second TTL
+            ..Default::default()
+        };
+
+        storage
+            .put(key.clone(), b"expires-soon".to_vec(), options)
+            .await
+            .expect("put failed");
+
+        // Should exist immediately
+        let result = storage
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed");
+        assert!(result.is_some());
+
+        // Wait for TTL to expire
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        // Should be gone now
+        let result = storage
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed");
+        assert!(result.is_none(), "TTL-expired key should return None");
+    }
+
+    #[tokio::test]
+    async fn test_version_preserved_across_updates() {
+        let storage = create_test_storage();
+
+        let key = StorageKey::new("test", "versioned");
+
+        // Initial put
+        let meta1 = storage
+            .put(key.clone(), b"v1".to_vec(), PutOptions::default())
+            .await
+            .expect("put 1 failed");
+        assert_eq!(meta1.version, 1);
+
+        // Second update
+        let meta2 = storage
+            .put(key.clone(), b"v2".to_vec(), PutOptions::default())
+            .await
+            .expect("put 2 failed");
+        assert_eq!(meta2.version, 2);
+
+        // Third update
+        let meta3 = storage
+            .put(key.clone(), b"v3".to_vec(), PutOptions::default())
+            .await
+            .expect("put 3 failed");
+        assert_eq!(meta3.version, 3);
+
+        // Fourth update
+        let meta4 = storage
+            .put(key.clone(), b"v4".to_vec(), PutOptions::default())
+            .await
+            .expect("put 4 failed");
+        assert_eq!(meta4.version, 4);
+
+        // Verify version is not reset and is monotonically increasing
+        let stored = storage
+            .get(&key, GetOptions::default())
+            .await
+            .expect("get failed")
+            .expect("should exist");
+        assert_eq!(stored.metadata.version, 4);
+    }
+
+    #[tokio::test]
+    async fn test_list_prefix_with_specific_prefix_filtering() {
+        let storage = create_test_storage();
+
+        // Add keys with different prefixes
+        storage
+            .put(
+                StorageKey::new("test", "apple/red"),
+                b"red apple".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+        storage
+            .put(
+                StorageKey::new("test", "apple/green"),
+                b"green apple".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+        storage
+            .put(
+                StorageKey::new("test", "banana/yellow"),
+                b"yellow banana".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+        storage
+            .put(
+                StorageKey::new("test", "cherry"),
+                b"cherry".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+
+        // List only apple prefix
+        let result = storage
+            .list_prefix("test", Some(b"apple"), 10, None)
+            .await
+            .expect("list_prefix failed");
+
+        // Should only return apple/* keys
+        assert_eq!(result.items.len(), 2);
+        for (key, _) in &result.items {
+            assert!(
+                key.key.starts_with(b"apple"),
+                "Key {:?} should start with 'apple'",
+                String::from_utf8_lossy(&key.key)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_prefix_pagination_edge_cases() {
+        let storage = create_test_storage();
+
+        // Add exactly 3 keys
+        for i in 0..3 {
+            let key = StorageKey::new("test", format!("key{:02}", i));
+            storage
+                .put(
+                    key,
+                    format!("value{}", i).into_bytes(),
+                    PutOptions::default(),
+                )
+                .await
+                .expect("put failed");
+        }
+
+        // Request exactly the number of items
+        let result = storage
+            .list_prefix("test", None, 3, None)
+            .await
+            .expect("list failed");
+        assert_eq!(result.items.len(), 3);
+
+        // Request more than available
+        let result = storage
+            .list_prefix("test", None, 100, None)
+            .await
+            .expect("list failed");
+        assert_eq!(result.items.len(), 3);
+        assert!(!result.has_more);
+
+        // Request less than available
+        let result = storage
+            .list_prefix("test", None, 2, None)
+            .await
+            .expect("list failed");
+        assert_eq!(result.items.len(), 2);
+        assert!(result.has_more);
+        assert!(result.continuation_token.is_some());
+
+        // Use continuation token to get remaining
+        let result2 = storage
+            .list_prefix("test", None, 10, result.continuation_token.as_deref())
+            .await
+            .expect("list failed");
+        assert_eq!(result2.items.len(), 1);
+        assert!(!result2.has_more);
+    }
+
+    #[tokio::test]
+    async fn test_list_before_block_empty_when_no_matches() {
+        let storage = create_test_storage();
+
+        // Add entries at block 100 and above
+        for block in [100, 200, 300] {
+            let key = StorageKey::new("test", format!("hash-{}", block));
+            storage
+                .put_with_block(key, b"data".to_vec(), block, PutOptions::default())
+                .await
+                .expect("put_with_block failed");
+        }
+
+        // Query before block 50 - should return nothing
+        let result = storage
+            .list_before_block("test", 50, 100)
+            .await
+            .expect("list_before_block failed");
+        assert!(result.is_empty());
+        assert_eq!(result.items.len(), 0);
+
+        // Query before block 100 - should also return nothing (exclusive)
+        let result = storage
+            .list_before_block("test", 100, 100)
+            .await
+            .expect("list_before_block failed");
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_after_block_pagination_limited_results() {
+        let storage = create_test_storage();
+
+        // Add 10 entries at blocks 0, 10, 20, ..., 90
+        for i in 0..10 {
+            let key = StorageKey::new("submissions", format!("hash-{:02}", i));
+            storage
+                .put_with_block(
+                    key,
+                    format!("data-{}", i).into_bytes(),
+                    i * 10,
+                    PutOptions::default(),
+                )
+                .await
+                .expect("put_with_block failed");
+        }
+
+        // Query after block 50 with limit 2
+        let result = storage
+            .list_after_block("submissions", 50, 2)
+            .await
+            .expect("list_after_block failed");
+
+        // Should return 2 items (blocks 60 and 70)
+        assert_eq!(result.items.len(), 2);
+        assert!(result.has_more);
+
+        // Verify we got the right items (after 50 means > 50)
+        // Items at blocks 60, 70, 80, 90 qualify, but we limited to 2
+    }
+
+    #[tokio::test]
+    async fn test_list_range_boundary_start_equals_end() {
+        let storage = create_test_storage();
+
+        // Add entries at different blocks
+        for block in [50, 100, 150] {
+            let key = StorageKey::new("test", format!("hash-{}", block));
+            storage
+                .put_with_block(key, b"data".to_vec(), block, PutOptions::default())
+                .await
+                .expect("put_with_block failed");
+        }
+
+        // Query range where start == end (single block)
+        let result = storage
+            .list_range("test", 100, 100, 100)
+            .await
+            .expect("list_range failed");
+
+        // Should return exactly the entry at block 100
+        assert_eq!(result.items.len(), 1);
+
+        // Query range for a block with no entries
+        let result = storage
+            .list_range("test", 75, 75, 100)
+            .await
+            .expect("list_range failed");
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_query_combined_filters_after_and_before_block() {
+        let storage = create_test_storage();
+
+        // Add entries at blocks 10, 20, 30, 40, 50, 60, 70
+        for block in [10, 20, 30, 40, 50, 60, 70] {
+            let key = StorageKey::new("combined", format!("hash-{}", block));
+            storage
+                .put_with_block(
+                    key,
+                    format!("data-{}", block).into_bytes(),
+                    block,
+                    PutOptions::default(),
+                )
+                .await
+                .expect("put_with_block failed");
+        }
+
+        // Query with both after_block AND before_block (range 25 < block < 55)
+        let query = QueryBuilder::new("combined")
+            .after_block(25)
+            .before_block(55)
+            .limit(100);
+
+        let result = storage.query(query).await.expect("query failed");
+
+        // Should match blocks 30, 40, 50 (> 25 AND < 55)
+        assert_eq!(result.items.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_query_cursor_continues_from_correct_position() {
+        let storage = create_test_storage();
+
+        // Add 20 entries
+        for i in 0..20 {
+            let key = StorageKey::new("cursor-test", format!("hash-{:02}", i));
+            storage
+                .put_with_block(
+                    key,
+                    format!("data-{}", i).into_bytes(),
+                    i * 10,
+                    PutOptions::default(),
+                )
+                .await
+                .expect("put_with_block failed");
+        }
+
+        // First query: get first 5 items
+        let query1 = QueryBuilder::new("cursor-test").limit(5);
+        let result1 = storage.query(query1).await.expect("query failed");
+        assert_eq!(result1.items.len(), 5);
+        assert!(result1.has_more);
+        assert!(result1.next_cursor.is_some());
+
+        // Second query: continue with cursor
+        let cursor1 = result1.next_cursor.clone().unwrap();
+        let query2 = QueryBuilder::new("cursor-test").limit(5).cursor(cursor1);
+        let result2 = storage.query(query2).await.expect("query failed");
+        assert_eq!(result2.items.len(), 5);
+
+        // Third query: continue again
+        let cursor2 = result2.next_cursor.clone().unwrap();
+        let query3 = QueryBuilder::new("cursor-test").limit(5).cursor(cursor2);
+        let result3 = storage.query(query3).await.expect("query failed");
+        assert_eq!(result3.items.len(), 5);
+
+        // Verify no overlap between all pages
+        let keys1: Vec<_> = result1.items.iter().map(|(k, _)| k.to_string()).collect();
+        let keys2: Vec<_> = result2.items.iter().map(|(k, _)| k.to_string()).collect();
+        let keys3: Vec<_> = result3.items.iter().map(|(k, _)| k.to_string()).collect();
+
+        for k in &keys1 {
+            assert!(!keys2.contains(k), "Key {} found in page 1 and 2", k);
+            assert!(!keys3.contains(k), "Key {} found in page 1 and 3", k);
+        }
+        for k in &keys2 {
+            assert!(!keys3.contains(k), "Key {} found in page 2 and 3", k);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_keys_needing_replication_filters_correctly() {
+        let storage = create_test_storage();
+
+        // Add some keys that need replication (default behavior)
+        for i in 0..3 {
+            let key = StorageKey::new("repl", format!("needs-repl-{}", i));
+            storage
+                .put(key, b"data".to_vec(), PutOptions::default())
+                .await
+                .expect("put failed");
+        }
+
+        // Add some keys that don't need replication (local_only)
+        for i in 0..2 {
+            let key = StorageKey::new("repl", format!("local-only-{}", i));
+            let options = PutOptions {
+                local_only: true,
+                ..Default::default()
+            };
+            storage
+                .put(key, b"local-data".to_vec(), options)
+                .await
+                .expect("put failed");
+        }
+
+        // Check keys needing replication
+        let keys = storage
+            .keys_needing_replication(100)
+            .expect("keys_needing_replication failed");
+
+        // Should only return keys that need replication (not local_only ones)
+        assert_eq!(keys.len(), 3);
+        for key in &keys {
+            assert!(
+                key.key.starts_with(b"needs-repl"),
+                "Unexpected key in replication list: {}",
+                key
+            );
+        }
+
+        // Test limit parameter
+        let keys = storage
+            .keys_needing_replication(2)
+            .expect("keys_needing_replication failed");
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn test_replication_info_meets_replication_factor() {
+        let mut info = ReplicationInfo::default();
+
+        // Initially empty, should not meet any factor > 0
+        assert!(!info.meets_replication_factor(1));
+        assert!(!info.meets_replication_factor(2));
+        assert!(info.meets_replication_factor(0)); // 0 is always met
+
+        // Add one node
+        info.mark_replicated("node-1");
+        assert!(info.meets_replication_factor(1));
+        assert!(!info.meets_replication_factor(2));
+        assert!(!info.meets_replication_factor(3));
+
+        // Add second node
+        info.mark_replicated("node-2");
+        assert!(info.meets_replication_factor(1));
+        assert!(info.meets_replication_factor(2));
+        assert!(!info.meets_replication_factor(3));
+
+        // Add third node
+        info.mark_replicated("node-3");
+        assert!(info.meets_replication_factor(3));
+
+        // Duplicate mark should not increase count
+        info.mark_replicated("node-1");
+        assert_eq!(info.replicated_to.len(), 3);
+    }
+
+    #[test]
+    fn test_replication_info_mark_replicated_updates_timestamp() {
+        let mut info = ReplicationInfo::default();
+        assert_eq!(info.last_replication_at, 0);
+
+        info.mark_replicated("node-1");
+        let first_timestamp = info.last_replication_at;
+        assert!(first_timestamp > 0);
+
+        // Wait a bit and mark again
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        info.mark_replicated("node-2");
+
+        assert!(
+            info.last_replication_at >= first_timestamp,
+            "Timestamp should be updated"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_with_zero_limit_returns_empty() {
+        let storage = create_test_storage();
+
+        // Add some data
+        for i in 0..5 {
+            let key = StorageKey::new("test", format!("key-{}", i));
+            storage
+                .put_with_block(key, b"data".to_vec(), i * 10, PutOptions::default())
+                .await
+                .expect("put_with_block failed");
+        }
+
+        // Query with limit 0
+        let query = QueryBuilder::new("test").limit(0);
+        let result = storage.query(query).await.expect("query failed");
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_namespace_isolation() {
+        let storage = create_test_storage();
+
+        // Add keys to multiple namespaces with same key names
+        storage
+            .put(
+                StorageKey::new("ns1", "same-key"),
+                b"value-ns1".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+        storage
+            .put(
+                StorageKey::new("ns2", "same-key"),
+                b"value-ns2".to_vec(),
+                PutOptions::default(),
+            )
+            .await
+            .expect("put failed");
+
+        // Get from ns1
+        let result = storage
+            .get(&StorageKey::new("ns1", "same-key"), GetOptions::default())
+            .await
+            .expect("get failed")
+            .expect("should exist");
+        assert_eq!(result.data, b"value-ns1");
+
+        // Get from ns2
+        let result = storage
+            .get(&StorageKey::new("ns2", "same-key"), GetOptions::default())
+            .await
+            .expect("get failed")
+            .expect("should exist");
+        assert_eq!(result.data, b"value-ns2");
+
+        // Delete from ns1 should not affect ns2
+        storage
+            .delete(&StorageKey::new("ns1", "same-key"))
+            .await
+            .expect("delete failed");
+
+        assert!(storage
+            .get(&StorageKey::new("ns1", "same-key"), GetOptions::default())
+            .await
+            .expect("get failed")
+            .is_none());
+        assert!(storage
+            .get(&StorageKey::new("ns2", "same-key"), GetOptions::default())
+            .await
+            .expect("get failed")
+            .is_some());
     }
 }
