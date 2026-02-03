@@ -1244,4 +1244,435 @@ mod tests {
         let root3 = compute_merkle_root(&three);
         assert_ne!(root3, root2);
     }
+
+    // ========================================================================
+    // Additional tests for comprehensive coverage
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_challenge_id_returns_correct_id() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "my-unique-challenge-id");
+
+        assert_eq!(store.challenge_id(), "my-unique-challenge-id");
+    }
+
+    #[tokio::test]
+    async fn test_inner_returns_valid_storage_reference() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "challenge-1");
+
+        // Verify inner() returns a valid reference by using it for a get operation
+        let key = StorageKey::new("test-ns", "test-key");
+        let result = store.inner().get(&key, GetOptions::default()).await;
+        
+        // Should not error, just return None for non-existent key
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_store_submission_different_challenge_ids_separate_stores() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = Arc::new(storage);
+
+        let store_alpha = ChallengeStore::with_arc(Arc::clone(&store), "challenge-alpha");
+        let store_beta = ChallengeStore::with_arc(Arc::clone(&store), "challenge-beta");
+        let store_gamma = ChallengeStore::with_arc(Arc::clone(&store), "challenge-gamma");
+
+        // Store submissions in different challenges
+        let sub_alpha = create_test_submission("challenge-alpha", "miner-1");
+        let sub_beta = create_test_submission("challenge-beta", "miner-2");
+        let sub_gamma = create_test_submission("challenge-gamma", "miner-3");
+
+        store_alpha
+            .store_submission(&sub_alpha.submission_hash, &sub_alpha)
+            .await
+            .expect("Failed to store alpha");
+        store_beta
+            .store_submission(&sub_beta.submission_hash, &sub_beta)
+            .await
+            .expect("Failed to store beta");
+        store_gamma
+            .store_submission(&sub_gamma.submission_hash, &sub_gamma)
+            .await
+            .expect("Failed to store gamma");
+
+        // Each store should only see its own submissions
+        let list_alpha = store_alpha.list_submissions(10).await.expect("Failed to list alpha");
+        let list_beta = store_beta.list_submissions(10).await.expect("Failed to list beta");
+        let list_gamma = store_gamma.list_submissions(10).await.expect("Failed to list gamma");
+
+        assert_eq!(list_alpha.len(), 1);
+        assert_eq!(list_beta.len(), 1);
+        assert_eq!(list_gamma.len(), 1);
+        assert_eq!(list_alpha[0].miner_hotkey, "miner-1");
+        assert_eq!(list_beta[0].miner_hotkey, "miner-2");
+        assert_eq!(list_gamma[0].miner_hotkey, "miner-3");
+    }
+
+    #[tokio::test]
+    async fn test_merkle_proof_verification_corrupted_leaf_hash() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "challenge-1");
+
+        let submission = create_test_submission("challenge-1", "miner-abc");
+        let hash = submission.submission_hash.clone();
+
+        // Store and get proof
+        let proof = store
+            .store_submission(&hash, &submission)
+            .await
+            .expect("Failed to store");
+
+        // Corrupt the leaf_hash
+        let mut corrupted_proof = proof.clone();
+        corrupted_proof.leaf_hash[0] ^= 0xFF;
+        corrupted_proof.leaf_hash[15] ^= 0xAA;
+
+        // Verification should fail with corrupted leaf hash
+        let is_valid = store.verify_submission(&hash, &corrupted_proof).await;
+        assert!(!is_valid, "Verification should fail with corrupted leaf_hash");
+    }
+
+    #[tokio::test]
+    async fn test_merkle_proof_verification_corrupted_path() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "challenge-1");
+
+        // Store multiple submissions to ensure we have a path
+        for i in 0..4 {
+            let sub = create_test_submission("challenge-1", &format!("miner-{}", i));
+            store
+                .store_submission(&sub.submission_hash, &sub)
+                .await
+                .expect("Failed to store");
+        }
+
+        let submission = create_test_submission("challenge-1", "miner-target");
+        let hash = submission.submission_hash.clone();
+        let proof = store
+            .store_submission(&hash, &submission)
+            .await
+            .expect("Failed to store");
+
+        // Corrupt the path
+        let mut corrupted_proof = proof.clone();
+        if !corrupted_proof.path.is_empty() {
+            corrupted_proof.path[0].sibling_hash[0] ^= 0xFF;
+            corrupted_proof.path[0].sibling_hash[31] ^= 0xBB;
+        }
+
+        // Verification should fail with corrupted path
+        let is_valid = store.verify_submission(&hash, &corrupted_proof).await;
+        assert!(!is_valid, "Verification should fail with corrupted path");
+    }
+
+    #[tokio::test]
+    async fn test_compute_state_root_is_deterministic() {
+        // Create two separate stores with identical data
+        let storage1 = LocalStorageBuilder::new("test-node-1")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage 1");
+        let storage2 = LocalStorageBuilder::new("test-node-2")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage 2");
+
+        let store1 = ChallengeStore::new(storage1, "challenge-1");
+        let store2 = ChallengeStore::new(storage2, "challenge-1");
+
+        // Store identical data in both stores
+        let sub_a = create_test_submission("challenge-1", "miner-a");
+        let sub_b = create_test_submission("challenge-1", "miner-b");
+
+        store1.store_submission(&sub_a.submission_hash, &sub_a).await.expect("Failed to store");
+        store1.store_submission(&sub_b.submission_hash, &sub_b).await.expect("Failed to store");
+
+        store2.store_submission(&sub_a.submission_hash, &sub_a).await.expect("Failed to store");
+        store2.store_submission(&sub_b.submission_hash, &sub_b).await.expect("Failed to store");
+
+        // State roots should be identical
+        let root1 = store1.compute_state_root().await;
+        let root2 = store2.compute_state_root().await;
+
+        assert_eq!(root1, root2, "State roots should be deterministic for same data");
+
+        // Compute multiple times should yield same result
+        let root1_again = store1.compute_state_root().await;
+        assert_eq!(root1, root1_again, "State root should be consistent across calls");
+    }
+
+    #[tokio::test]
+    async fn test_get_evaluations_empty_list() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "challenge-1");
+
+        // Get evaluations for a submission that doesn't exist
+        let evals = store
+            .get_evaluations("non-existent-submission")
+            .await
+            .expect("Failed to get evaluations");
+
+        assert!(evals.is_empty(), "Should return empty vec for non-existent submission");
+    }
+
+    #[tokio::test]
+    async fn test_get_weights_non_existent_epoch() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "challenge-1");
+
+        // Store weights at epoch 100
+        let weights = create_test_weights("challenge-1", 100);
+        store.store_weights(100, &weights).await.expect("Failed to store");
+
+        // Query for non-existent epochs
+        let result_50 = store.get_weights(50).await.expect("Failed to get");
+        let result_9999 = store.get_weights(9999).await.expect("Failed to get");
+        let result_0 = store.get_weights(0).await.expect("Failed to get");
+
+        assert!(result_50.is_none(), "Should return None for epoch 50");
+        assert!(result_9999.is_none(), "Should return None for epoch 9999");
+        assert!(result_0.is_none(), "Should return None for epoch 0");
+
+        // Existing epoch should work
+        let result_100 = store.get_weights(100).await.expect("Failed to get");
+        assert!(result_100.is_some(), "Should return Some for epoch 100");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_submissions_ordered_correctly() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let store = ChallengeStore::new(storage, "challenge-1");
+
+        // Store submissions with predictable ordering (using miners a, b, c, d, e)
+        let miners = vec!["miner-a", "miner-b", "miner-c", "miner-d", "miner-e"];
+        let mut stored_hashes = Vec::new();
+
+        for miner in &miners {
+            let sub = create_test_submission("challenge-1", miner);
+            stored_hashes.push(sub.submission_hash.clone());
+            store
+                .store_submission(&sub.submission_hash, &sub)
+                .await
+                .expect("Failed to store");
+        }
+
+        // List all submissions
+        let submissions = store.list_submissions(100).await.expect("Failed to list");
+
+        // Should have all 5 submissions
+        assert_eq!(submissions.len(), 5, "Should have 5 submissions");
+
+        // Verify all miners are present
+        let retrieved_miners: Vec<&str> = submissions.iter().map(|s| s.miner_hotkey.as_str()).collect();
+        for miner in &miners {
+            assert!(
+                retrieved_miners.contains(miner),
+                "Miner {} should be in the list",
+                miner
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_challenge_store_registry_caching_behavior() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let registry = ChallengeStoreRegistry::new(storage);
+
+        // Get store for challenge-1 multiple times
+        let store1_first = registry.get_or_create("challenge-1").await;
+        let store1_second = registry.get_or_create("challenge-1").await;
+        let store1_third = registry.get_or_create("challenge-1").await;
+
+        // All references should point to the same challenge ID
+        assert_eq!(store1_first.challenge_id(), "challenge-1");
+        assert_eq!(store1_second.challenge_id(), "challenge-1");
+        assert_eq!(store1_third.challenge_id(), "challenge-1");
+
+        // Store data using first reference
+        let sub = create_test_submission("challenge-1", "miner-test");
+        store1_first
+            .store_submission(&sub.submission_hash, &sub)
+            .await
+            .expect("Failed to store");
+
+        // Data should be visible from other references (proving same underlying store)
+        let from_second = store1_second
+            .get_submission(&sub.submission_hash)
+            .await
+            .expect("Failed to get");
+        let from_third = store1_third
+            .get_submission(&sub.submission_hash)
+            .await
+            .expect("Failed to get");
+
+        assert!(from_second.is_some(), "Should find submission from second reference");
+        assert!(from_third.is_some(), "Should find submission from third reference");
+
+        // Different challenge should be isolated
+        let store2 = registry.get_or_create("challenge-2").await;
+        let from_different = store2
+            .get_submission(&sub.submission_hash)
+            .await
+            .expect("Failed to get");
+        assert!(from_different.is_none(), "Different challenge should not have the submission");
+    }
+
+    #[test]
+    fn test_compute_merkle_root_with_1_leaf() {
+        let leaf = hash_bytes(b"single-leaf-data");
+        let leaves = vec![leaf];
+
+        let root = compute_merkle_root(&leaves);
+
+        // With a single leaf, the root should equal the leaf
+        assert_eq!(root, leaf, "Root of single leaf should be the leaf itself");
+    }
+
+    #[test]
+    fn test_compute_merkle_root_with_2_leaves() {
+        let leaf1 = hash_bytes(b"leaf-1");
+        let leaf2 = hash_bytes(b"leaf-2");
+        let leaves = vec![leaf1, leaf2];
+
+        let root = compute_merkle_root(&leaves);
+
+        // Root should be hash of the two leaves
+        let expected = hash_pair(&leaf1, &leaf2);
+        assert_eq!(root, expected, "Root of 2 leaves should be hash_pair of them");
+    }
+
+    #[test]
+    fn test_compute_merkle_root_with_3_leaves() {
+        let leaf1 = hash_bytes(b"leaf-1");
+        let leaf2 = hash_bytes(b"leaf-2");
+        let leaf3 = hash_bytes(b"leaf-3");
+        let leaves = vec![leaf1, leaf2, leaf3];
+
+        let root = compute_merkle_root(&leaves);
+
+        // 3 leaves: first level has 2 hashes (pair(1,2), pair(3,3))
+        // second level: pair of those two
+        let level1_left = hash_pair(&leaf1, &leaf2);
+        let level1_right = hash_pair(&leaf3, &leaf3); // odd leaf duplicated
+        let expected = hash_pair(&level1_left, &level1_right);
+
+        assert_eq!(root, expected, "Root of 3 leaves should follow odd-leaf duplication rule");
+    }
+
+    #[test]
+    fn test_compute_merkle_root_with_4_leaves() {
+        let leaf1 = hash_bytes(b"leaf-1");
+        let leaf2 = hash_bytes(b"leaf-2");
+        let leaf3 = hash_bytes(b"leaf-3");
+        let leaf4 = hash_bytes(b"leaf-4");
+        let leaves = vec![leaf1, leaf2, leaf3, leaf4];
+
+        let root = compute_merkle_root(&leaves);
+
+        // 4 leaves: perfect binary tree
+        let level1_left = hash_pair(&leaf1, &leaf2);
+        let level1_right = hash_pair(&leaf3, &leaf4);
+        let expected = hash_pair(&level1_left, &level1_right);
+
+        assert_eq!(root, expected, "Root of 4 leaves should be balanced tree hash");
+    }
+
+    #[test]
+    fn test_hash_pair_produces_consistent_results() {
+        let a = hash_bytes(b"data-a");
+        let b = hash_bytes(b"data-b");
+
+        // Same inputs should produce same output
+        let result1 = hash_pair(&a, &b);
+        let result2 = hash_pair(&a, &b);
+        assert_eq!(result1, result2, "hash_pair should be deterministic");
+
+        // Different order should produce different result
+        let result_reversed = hash_pair(&b, &a);
+        assert_ne!(result1, result_reversed, "hash_pair(a,b) != hash_pair(b,a)");
+
+        // Different inputs should produce different result
+        let c = hash_bytes(b"data-c");
+        let result_ac = hash_pair(&a, &c);
+        assert_ne!(result1, result_ac, "Different inputs should produce different hash");
+    }
+
+    #[test]
+    fn test_merkle_proof_verify_with_wrong_data() {
+        let data = b"original data";
+        let hash = hash_bytes(data);
+
+        let leaves = vec![hash, [1u8; 32], [2u8; 32]];
+        let proof = build_merkle_proof(&leaves, 0, data);
+
+        // Original data should verify
+        assert!(proof.verify(data), "Original data should verify");
+
+        // Different data should not verify
+        assert!(!proof.verify(b"different data"), "Different data should not verify");
+        assert!(!proof.verify(b"original dat"), "Partial data should not verify");
+        assert!(!proof.verify(b"original data!"), "Extended data should not verify");
+        assert!(!proof.verify(b""), "Empty data should not verify");
+    }
+
+    #[tokio::test]
+    async fn test_registry_inner_returns_shared_store() {
+        let storage = LocalStorageBuilder::new("test-node")
+            .in_memory()
+            .build()
+            .expect("Failed to create storage");
+
+        let registry = ChallengeStoreRegistry::new(storage);
+
+        // inner() should return the underlying store
+        let inner = registry.inner();
+        
+        // Use the inner store directly
+        let key = StorageKey::new("direct-ns", "direct-key");
+        let put_result = inner.put(key.clone(), b"direct-value".to_vec(), PutOptions::default()).await;
+        assert!(put_result.is_ok(), "Should be able to use inner store directly");
+
+        let get_result = inner.get(&key, GetOptions::default()).await;
+        assert!(get_result.is_ok(), "Should be able to get from inner store");
+        assert!(get_result.unwrap().is_some(), "Value should be present");
+    }
 }
