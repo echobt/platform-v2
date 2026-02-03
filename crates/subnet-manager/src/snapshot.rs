@@ -10,6 +10,78 @@ use std::fs;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
+/// Challenge-specific state snapshot for hot-reload
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeStateSnapshot {
+    /// Snapshot ID
+    pub id: uuid::Uuid,
+
+    /// Challenge crate identifier
+    pub challenge_id: String,
+
+    /// Challenge crate version at snapshot time
+    pub crate_version: String,
+
+    /// Serialized challenge state
+    pub state_data: Vec<u8>,
+
+    /// Pending evaluations at snapshot time
+    pub pending_evaluations: Vec<ChallengeEvaluationState>,
+
+    /// Snapshot reason (e.g., "pre_update", "scheduled", "manual")
+    pub reason: String,
+
+    /// Created timestamp
+    pub created_at: DateTime<Utc>,
+
+    /// State hash for integrity verification
+    pub state_hash: String,
+}
+
+/// State of a challenge evaluation at snapshot time
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeEvaluationState {
+    /// Evaluation request ID
+    pub request_id: String,
+
+    /// Participant identifier
+    pub participant_id: String,
+
+    /// Progress percentage (0-100)
+    pub progress: u8,
+
+    /// Evaluation-specific data (JSON serialized as string for bincode compatibility)
+    pub data: String,
+
+    /// Started timestamp
+    pub started_at: DateTime<Utc>,
+}
+
+/// Metadata for a challenge snapshot (without full data)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeSnapshotMeta {
+    /// Snapshot ID
+    pub id: uuid::Uuid,
+
+    /// Challenge crate identifier
+    pub challenge_id: String,
+
+    /// Challenge crate version at snapshot time
+    pub crate_version: String,
+
+    /// Snapshot reason
+    pub reason: String,
+
+    /// Created timestamp
+    pub created_at: DateTime<Utc>,
+
+    /// Size in bytes
+    pub size_bytes: u64,
+
+    /// Number of pending evaluations
+    pub pending_count: usize,
+}
+
 /// Snapshot metadata
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotMeta {
@@ -70,6 +142,12 @@ pub struct SnapshotManager {
 
     /// Available snapshots
     snapshots: Vec<SnapshotMeta>,
+
+    /// Challenge snapshots directory
+    challenge_snapshots_dir: PathBuf,
+
+    /// Challenge snapshots metadata
+    challenge_snapshots: Vec<ChallengeSnapshotMeta>,
 }
 
 impl SnapshotManager {
@@ -78,14 +156,20 @@ impl SnapshotManager {
         let snapshots_dir = data_dir.join("snapshots");
         fs::create_dir_all(&snapshots_dir)?;
 
+        let challenge_snapshots_dir = data_dir.join("challenge_snapshots");
+        fs::create_dir_all(&challenge_snapshots_dir)?;
+
         let mut manager = Self {
             data_dir,
             snapshots_dir,
             max_snapshots,
             snapshots: Vec::new(),
+            challenge_snapshots_dir,
+            challenge_snapshots: Vec::new(),
         };
 
         manager.load_snapshot_index()?;
+        manager.load_challenge_snapshot_index()?;
         Ok(manager)
     }
 
@@ -105,6 +189,26 @@ impl SnapshotManager {
     fn save_snapshot_index(&self) -> anyhow::Result<()> {
         let index_path = self.snapshots_dir.join("index.json");
         let content = serde_json::to_string_pretty(&self.snapshots)?;
+        fs::write(&index_path, content)?;
+        Ok(())
+    }
+
+    /// Load challenge snapshot index
+    fn load_challenge_snapshot_index(&mut self) -> anyhow::Result<()> {
+        let index_path = self.challenge_snapshots_dir.join("index.json");
+
+        if index_path.exists() {
+            let content = fs::read_to_string(&index_path)?;
+            self.challenge_snapshots = serde_json::from_str(&content)?;
+        }
+
+        Ok(())
+    }
+
+    /// Save challenge snapshot index
+    fn save_challenge_snapshot_index(&self) -> anyhow::Result<()> {
+        let index_path = self.challenge_snapshots_dir.join("index.json");
+        let content = serde_json::to_string_pretty(&self.challenge_snapshots)?;
         fs::write(&index_path, content)?;
         Ok(())
     }
@@ -303,6 +407,140 @@ impl SnapshotManager {
 
         self.save_snapshot_index()?;
         Ok(())
+    }
+
+    /// Create a challenge-specific state snapshot
+    pub fn create_challenge_snapshot(
+        &mut self,
+        challenge_id: &str,
+        crate_version: &str,
+        state_data: Vec<u8>,
+        pending_evaluations: Vec<ChallengeEvaluationState>,
+        reason: &str,
+    ) -> anyhow::Result<uuid::Uuid> {
+        info!(
+            "Creating challenge snapshot: {} (version={})",
+            challenge_id, crate_version
+        );
+
+        let id = uuid::Uuid::new_v4();
+        let state_hash = Self::compute_hash(&state_data);
+        let pending_count = pending_evaluations.len();
+
+        let snapshot = ChallengeStateSnapshot {
+            id,
+            challenge_id: challenge_id.to_string(),
+            crate_version: crate_version.to_string(),
+            state_data,
+            pending_evaluations,
+            reason: reason.to_string(),
+            created_at: Utc::now(),
+            state_hash,
+        };
+
+        // Save snapshot to disk
+        let snapshot_path = self
+            .challenge_snapshots_dir
+            .join(format!("{}.challenge_snapshot", id));
+        let snapshot_bytes = bincode::serialize(&snapshot)
+            .expect("Failed to serialize challenge snapshot - snapshot data may be corrupted");
+        fs::write(&snapshot_path, &snapshot_bytes)?;
+
+        // Create metadata
+        let meta = ChallengeSnapshotMeta {
+            id,
+            challenge_id: challenge_id.to_string(),
+            crate_version: crate_version.to_string(),
+            reason: reason.to_string(),
+            created_at: snapshot.created_at,
+            size_bytes: snapshot_bytes.len() as u64,
+            pending_count,
+        };
+
+        self.challenge_snapshots.push(meta);
+        self.save_challenge_snapshot_index()?;
+
+        info!(
+            "Challenge snapshot created: {} ({} bytes, {} pending evaluations)",
+            id,
+            snapshot_bytes.len(),
+            pending_count
+        );
+        Ok(id)
+    }
+
+    /// Restore challenge state from snapshot
+    pub fn restore_challenge_snapshot(
+        &self,
+        snapshot_id: uuid::Uuid,
+    ) -> anyhow::Result<ChallengeStateSnapshot> {
+        info!("Restoring challenge snapshot: {}", snapshot_id);
+
+        let snapshot_path = self
+            .challenge_snapshots_dir
+            .join(format!("{}.challenge_snapshot", snapshot_id));
+
+        if !snapshot_path.exists() {
+            anyhow::bail!("Challenge snapshot not found: {}", snapshot_id);
+        }
+
+        let snapshot_bytes = fs::read(&snapshot_path)?;
+        let snapshot: ChallengeStateSnapshot = bincode::deserialize(&snapshot_bytes)
+            .expect("Failed to deserialize challenge snapshot - snapshot file may be corrupted");
+
+        // Verify hash
+        let computed_hash = Self::compute_hash(&snapshot.state_data);
+        if computed_hash != snapshot.state_hash {
+            anyhow::bail!("Challenge snapshot corrupted: hash mismatch");
+        }
+
+        info!(
+            "Challenge snapshot loaded: {} (challenge={}, version={})",
+            snapshot_id, snapshot.challenge_id, snapshot.crate_version
+        );
+        Ok(snapshot)
+    }
+
+    /// List challenge snapshots
+    pub fn list_challenge_snapshots(
+        &self,
+        challenge_id: Option<&str>,
+    ) -> Vec<ChallengeSnapshotMeta> {
+        match challenge_id {
+            Some(id) => self
+                .challenge_snapshots
+                .iter()
+                .filter(|s| s.challenge_id == id)
+                .cloned()
+                .collect(),
+            None => self.challenge_snapshots.clone(),
+        }
+    }
+
+    /// Delete challenge snapshot
+    pub fn delete_challenge_snapshot(&mut self, snapshot_id: uuid::Uuid) -> anyhow::Result<()> {
+        let snapshot_path = self
+            .challenge_snapshots_dir
+            .join(format!("{}.challenge_snapshot", snapshot_id));
+
+        if snapshot_path.exists() {
+            fs::remove_file(&snapshot_path)?;
+        }
+
+        self.challenge_snapshots.retain(|s| s.id != snapshot_id);
+        self.save_challenge_snapshot_index()?;
+
+        info!("Challenge snapshot deleted: {}", snapshot_id);
+        Ok(())
+    }
+
+    /// Get latest challenge snapshot for a specific challenge
+    pub fn latest_challenge_snapshot(&self, challenge_id: &str) -> Option<ChallengeSnapshotMeta> {
+        self.challenge_snapshots
+            .iter()
+            .filter(|s| s.challenge_id == challenge_id)
+            .max_by_key(|s| s.created_at)
+            .cloned()
     }
 
     /// Compute SHA256 hash
@@ -837,5 +1075,522 @@ mod tests {
         // Verify deterministic ordering without relying on timing jitter
         let names: Vec<&str> = snapshots.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["snap0", "snap1", "snap2"]);
+    }
+
+    // ============================================================================
+    // Challenge Snapshot Tests
+    // ============================================================================
+
+    #[test]
+    fn test_challenge_snapshot_struct_fields() {
+        let snapshot = ChallengeStateSnapshot {
+            id: uuid::Uuid::new_v4(),
+            challenge_id: "test_challenge".into(),
+            crate_version: "1.0.0".into(),
+            state_data: vec![1, 2, 3, 4],
+            pending_evaluations: vec![],
+            reason: "pre_update".into(),
+            created_at: Utc::now(),
+            state_hash: "abc123".into(),
+        };
+
+        assert_eq!(snapshot.challenge_id, "test_challenge");
+        assert_eq!(snapshot.crate_version, "1.0.0");
+        assert_eq!(snapshot.state_data, vec![1, 2, 3, 4]);
+        assert_eq!(snapshot.reason, "pre_update");
+    }
+
+    #[test]
+    fn test_challenge_evaluation_state_struct() {
+        let eval_state = ChallengeEvaluationState {
+            request_id: "req-123".into(),
+            participant_id: "participant-456".into(),
+            progress: 75,
+            data: r#"{"score": 100}"#.into(),
+            started_at: Utc::now(),
+        };
+
+        assert_eq!(eval_state.request_id, "req-123");
+        assert_eq!(eval_state.participant_id, "participant-456");
+        assert_eq!(eval_state.progress, 75);
+        
+        // Parse the data as JSON to verify
+        let parsed: serde_json::Value = serde_json::from_str(&eval_state.data).unwrap();
+        assert_eq!(parsed["score"], 100);
+    }
+
+    #[test]
+    fn test_challenge_snapshot_meta_struct() {
+        let meta = ChallengeSnapshotMeta {
+            id: uuid::Uuid::new_v4(),
+            challenge_id: "my_challenge".into(),
+            crate_version: "2.0.0".into(),
+            reason: "scheduled".into(),
+            created_at: Utc::now(),
+            size_bytes: 4096,
+            pending_count: 5,
+        };
+
+        assert_eq!(meta.challenge_id, "my_challenge");
+        assert_eq!(meta.crate_version, "2.0.0");
+        assert_eq!(meta.reason, "scheduled");
+        assert_eq!(meta.size_bytes, 4096);
+        assert_eq!(meta.pending_count, 5);
+    }
+
+    #[test]
+    fn test_create_challenge_snapshot() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let state_data = b"serialized_challenge_state".to_vec();
+        let pending_evaluations = vec![ChallengeEvaluationState {
+            request_id: "req-001".into(),
+            participant_id: "user-123".into(),
+            progress: 50,
+            data: r#"{"task": "solve_puzzle"}"#.into(),
+            started_at: Utc::now(),
+        }];
+
+        let id = manager
+            .create_challenge_snapshot(
+                "challenge_alpha",
+                "1.2.3",
+                state_data.clone(),
+                pending_evaluations,
+                "pre_update",
+            )
+            .unwrap();
+
+        // Verify metadata was added
+        let snapshots = manager.list_challenge_snapshots(None);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, id);
+        assert_eq!(snapshots[0].challenge_id, "challenge_alpha");
+        assert_eq!(snapshots[0].crate_version, "1.2.3");
+        assert_eq!(snapshots[0].reason, "pre_update");
+        assert_eq!(snapshots[0].pending_count, 1);
+        assert!(snapshots[0].size_bytes > 0);
+    }
+
+    #[test]
+    fn test_restore_challenge_snapshot() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let state_data = b"important_state_data".to_vec();
+        let pending_evaluations = vec![
+            ChallengeEvaluationState {
+                request_id: "req-001".into(),
+                participant_id: "user-123".into(),
+                progress: 30,
+                data: "{}".into(),
+                started_at: Utc::now(),
+            },
+            ChallengeEvaluationState {
+                request_id: "req-002".into(),
+                participant_id: "user-456".into(),
+                progress: 80,
+                data: r#"{"status": "almost_done"}"#.into(),
+                started_at: Utc::now(),
+            },
+        ];
+
+        let id = manager
+            .create_challenge_snapshot(
+                "challenge_beta",
+                "2.0.0",
+                state_data.clone(),
+                pending_evaluations,
+                "manual",
+            )
+            .unwrap();
+
+        // Restore the snapshot
+        let restored = manager.restore_challenge_snapshot(id).unwrap();
+
+        assert_eq!(restored.id, id);
+        assert_eq!(restored.challenge_id, "challenge_beta");
+        assert_eq!(restored.crate_version, "2.0.0");
+        assert_eq!(restored.state_data, state_data);
+        assert_eq!(restored.pending_evaluations.len(), 2);
+        assert_eq!(restored.reason, "manual");
+    }
+
+    #[test]
+    fn test_restore_challenge_snapshot_not_found() {
+        let dir = tempdir().unwrap();
+        let manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let result = manager.restore_challenge_snapshot(uuid::Uuid::new_v4());
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("not found"));
+    }
+
+    #[test]
+    fn test_restore_challenge_snapshot_hash_mismatch() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let state_data = b"original_state".to_vec();
+        let id = manager
+            .create_challenge_snapshot("challenge_corrupt", "1.0.0", state_data, vec![], "test")
+            .unwrap();
+
+        // Corrupt the snapshot by modifying the state_hash in the file
+        let snapshot_path = dir
+            .path()
+            .join("challenge_snapshots")
+            .join(format!("{}.challenge_snapshot", id));
+        let bytes = std::fs::read(&snapshot_path).unwrap();
+        let mut snapshot: ChallengeStateSnapshot = bincode::deserialize(&bytes).unwrap();
+        snapshot.state_hash = "corrupted_hash".into();
+        let corrupt_bytes = bincode::serialize(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, corrupt_bytes).unwrap();
+
+        let result = manager.restore_challenge_snapshot(id);
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("hash mismatch"));
+    }
+
+    #[test]
+    fn test_list_challenge_snapshots_all() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 10).unwrap();
+
+        // Create snapshots for different challenges
+        manager
+            .create_challenge_snapshot("challenge_a", "1.0.0", vec![1], vec![], "test")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_b", "1.0.0", vec![2], vec![], "test")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_a", "1.1.0", vec![3], vec![], "update")
+            .unwrap();
+
+        let all_snapshots = manager.list_challenge_snapshots(None);
+        assert_eq!(all_snapshots.len(), 3);
+    }
+
+    #[test]
+    fn test_list_challenge_snapshots_filtered() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 10).unwrap();
+
+        // Create snapshots for different challenges
+        manager
+            .create_challenge_snapshot("challenge_a", "1.0.0", vec![1], vec![], "test")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_b", "1.0.0", vec![2], vec![], "test")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_a", "1.1.0", vec![3], vec![], "update")
+            .unwrap();
+
+        // Filter by challenge_a
+        let challenge_a_snapshots = manager.list_challenge_snapshots(Some("challenge_a"));
+        assert_eq!(challenge_a_snapshots.len(), 2);
+        assert!(challenge_a_snapshots
+            .iter()
+            .all(|s| s.challenge_id == "challenge_a"));
+
+        // Filter by challenge_b
+        let challenge_b_snapshots = manager.list_challenge_snapshots(Some("challenge_b"));
+        assert_eq!(challenge_b_snapshots.len(), 1);
+        assert_eq!(challenge_b_snapshots[0].challenge_id, "challenge_b");
+
+        // Filter by non-existent challenge
+        let empty = manager.list_challenge_snapshots(Some("challenge_c"));
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_delete_challenge_snapshot() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let id = manager
+            .create_challenge_snapshot("challenge_to_delete", "1.0.0", vec![1, 2, 3], vec![], "test")
+            .unwrap();
+
+        assert_eq!(manager.list_challenge_snapshots(None).len(), 1);
+
+        // Delete the snapshot
+        manager.delete_challenge_snapshot(id).unwrap();
+
+        assert_eq!(manager.list_challenge_snapshots(None).len(), 0);
+
+        // Verify file is also deleted
+        let snapshot_path = dir
+            .path()
+            .join("challenge_snapshots")
+            .join(format!("{}.challenge_snapshot", id));
+        assert!(!snapshot_path.exists());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_challenge_snapshot() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        // Deleting non-existent snapshot should succeed (no-op)
+        let result = manager.delete_challenge_snapshot(uuid::Uuid::new_v4());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_latest_challenge_snapshot() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 10).unwrap();
+
+        // No snapshots yet
+        assert!(manager.latest_challenge_snapshot("challenge_x").is_none());
+
+        // Create multiple snapshots for the same challenge
+        manager
+            .create_challenge_snapshot("challenge_x", "1.0.0", vec![1], vec![], "first")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_x", "1.1.0", vec![2], vec![], "second")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_y", "1.0.0", vec![3], vec![], "other")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("challenge_x", "1.2.0", vec![4], vec![], "third")
+            .unwrap();
+
+        // Get latest for challenge_x
+        let latest = manager.latest_challenge_snapshot("challenge_x").unwrap();
+        assert_eq!(latest.challenge_id, "challenge_x");
+        assert_eq!(latest.crate_version, "1.2.0");
+        assert_eq!(latest.reason, "third");
+
+        // Get latest for challenge_y
+        let latest_y = manager.latest_challenge_snapshot("challenge_y").unwrap();
+        assert_eq!(latest_y.challenge_id, "challenge_y");
+        assert_eq!(latest_y.crate_version, "1.0.0");
+
+        // Non-existent challenge
+        assert!(manager.latest_challenge_snapshot("challenge_z").is_none());
+    }
+
+    #[test]
+    fn test_challenge_snapshot_persistence() {
+        let dir = tempdir().unwrap();
+
+        let id1;
+        let id2;
+        {
+            let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+            id1 = manager
+                .create_challenge_snapshot("persistent_challenge", "1.0.0", vec![10, 20, 30], vec![], "persist_test")
+                .unwrap();
+            id2 = manager
+                .create_challenge_snapshot("persistent_challenge", "1.1.0", vec![40, 50], vec![], "persist_test_2")
+                .unwrap();
+        }
+
+        // Create a new manager instance and verify persistence
+        let manager2 = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+        let snapshots = manager2.list_challenge_snapshots(None);
+        assert_eq!(snapshots.len(), 2);
+
+        // Verify we can restore the snapshots
+        let restored1 = manager2.restore_challenge_snapshot(id1).unwrap();
+        assert_eq!(restored1.state_data, vec![10, 20, 30]);
+        assert_eq!(restored1.crate_version, "1.0.0");
+
+        let restored2 = manager2.restore_challenge_snapshot(id2).unwrap();
+        assert_eq!(restored2.state_data, vec![40, 50]);
+        assert_eq!(restored2.crate_version, "1.1.0");
+    }
+
+    #[test]
+    fn test_challenge_snapshot_with_pending_evaluations() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let pending = vec![
+            ChallengeEvaluationState {
+                request_id: "eval-001".into(),
+                participant_id: "miner-alice".into(),
+                progress: 25,
+                data: r#"{"task_id": "task_1", "intermediate_score": 50}"#.into(),
+                started_at: Utc::now(),
+            },
+            ChallengeEvaluationState {
+                request_id: "eval-002".into(),
+                participant_id: "miner-bob".into(),
+                progress: 90,
+                data: r#"{"task_id": "task_2", "intermediate_score": 95}"#.into(),
+                started_at: Utc::now(),
+            },
+        ];
+
+        let id = manager
+            .create_challenge_snapshot(
+                "eval_challenge",
+                "3.0.0",
+                b"state_with_evals".to_vec(),
+                pending,
+                "pre_update",
+            )
+            .unwrap();
+
+        // Verify metadata
+        let snapshots = manager.list_challenge_snapshots(Some("eval_challenge"));
+        assert_eq!(snapshots[0].pending_count, 2);
+
+        // Restore and verify evaluations
+        let restored = manager.restore_challenge_snapshot(id).unwrap();
+        assert_eq!(restored.pending_evaluations.len(), 2);
+
+        let eval1 = &restored.pending_evaluations[0];
+        assert_eq!(eval1.request_id, "eval-001");
+        assert_eq!(eval1.participant_id, "miner-alice");
+        assert_eq!(eval1.progress, 25);
+        let data1: serde_json::Value = serde_json::from_str(&eval1.data).unwrap();
+        assert_eq!(data1["task_id"], "task_1");
+
+        let eval2 = &restored.pending_evaluations[1];
+        assert_eq!(eval2.request_id, "eval-002");
+        assert_eq!(eval2.participant_id, "miner-bob");
+        assert_eq!(eval2.progress, 90);
+    }
+
+    #[test]
+    fn test_challenge_snapshot_empty_state() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let id = manager
+            .create_challenge_snapshot("empty_challenge", "0.1.0", vec![], vec![], "initial")
+            .unwrap();
+
+        let restored = manager.restore_challenge_snapshot(id).unwrap();
+        assert!(restored.state_data.is_empty());
+        assert!(restored.pending_evaluations.is_empty());
+    }
+
+    #[test]
+    fn test_challenge_snapshot_large_state_data() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        // Create a large state (1MB)
+        let large_state: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
+
+        let id = manager
+            .create_challenge_snapshot("large_challenge", "1.0.0", large_state.clone(), vec![], "large_test")
+            .unwrap();
+
+        let snapshots = manager.list_challenge_snapshots(Some("large_challenge"));
+        assert!(snapshots[0].size_bytes > 1_000_000); // Should be at least 1MB
+
+        let restored = manager.restore_challenge_snapshot(id).unwrap();
+        assert_eq!(restored.state_data.len(), 1_000_000);
+        assert_eq!(restored.state_data, large_state);
+    }
+
+    #[test]
+    fn test_challenge_snapshot_version_tracking() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 10).unwrap();
+
+        // Simulate version upgrades
+        manager
+            .create_challenge_snapshot("versioned_challenge", "1.0.0", vec![1], vec![], "initial")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("versioned_challenge", "1.0.1", vec![2], vec![], "patch")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("versioned_challenge", "1.1.0", vec![3], vec![], "minor")
+            .unwrap();
+        manager
+            .create_challenge_snapshot("versioned_challenge", "2.0.0", vec![4], vec![], "major")
+            .unwrap();
+
+        let snapshots = manager.list_challenge_snapshots(Some("versioned_challenge"));
+        let versions: Vec<&str> = snapshots.iter().map(|s| s.crate_version.as_str()).collect();
+        assert_eq!(versions, vec!["1.0.0", "1.0.1", "1.1.0", "2.0.0"]);
+
+        // Latest should be 2.0.0
+        let latest = manager.latest_challenge_snapshot("versioned_challenge").unwrap();
+        assert_eq!(latest.crate_version, "2.0.0");
+    }
+
+    #[test]
+    fn test_challenge_snapshots_dir_creation() {
+        let dir = tempdir().unwrap();
+        let challenge_snapshots_dir = dir.path().join("challenge_snapshots");
+
+        // Directory should not exist yet
+        assert!(!challenge_snapshots_dir.exists());
+
+        // Create manager - should create the directory
+        let _manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        // Now it should exist
+        assert!(challenge_snapshots_dir.exists());
+    }
+
+    #[test]
+    fn test_challenge_snapshot_index_persistence() {
+        let dir = tempdir().unwrap();
+
+        // Create snapshots with first manager
+        {
+            let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+            manager
+                .create_challenge_snapshot("index_test", "1.0.0", vec![1], vec![], "first")
+                .unwrap();
+            manager
+                .create_challenge_snapshot("index_test", "2.0.0", vec![2], vec![], "second")
+                .unwrap();
+        }
+
+        // Verify index file exists
+        let index_path = dir.path().join("challenge_snapshots").join("index.json");
+        assert!(index_path.exists());
+
+        // Load with new manager and verify index was loaded
+        let manager2 = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+        let snapshots = manager2.list_challenge_snapshots(Some("index_test"));
+        assert_eq!(snapshots.len(), 2);
+    }
+
+    #[test]
+    fn test_challenge_snapshot_does_not_affect_regular_snapshots() {
+        let dir = tempdir().unwrap();
+        let mut manager = SnapshotManager::new(dir.path().to_path_buf(), 5).unwrap();
+
+        let kp = Keypair::generate();
+        let state = ChainState::new(kp.hotkey(), NetworkConfig::default());
+
+        // Create regular snapshot
+        let regular_id = manager
+            .create_snapshot("regular_snap", 100, 1, &state, "test", false)
+            .unwrap();
+
+        // Create challenge snapshot
+        let challenge_id = manager
+            .create_challenge_snapshot("isolated_challenge", "1.0.0", vec![1, 2, 3], vec![], "test")
+            .unwrap();
+
+        // Verify they are in separate lists
+        assert_eq!(manager.list_snapshots().len(), 1);
+        assert_eq!(manager.list_challenge_snapshots(None).len(), 1);
+
+        // Deleting one should not affect the other
+        manager.delete_challenge_snapshot(challenge_id).unwrap();
+        assert_eq!(manager.list_snapshots().len(), 1);
+        assert_eq!(manager.list_challenge_snapshots(None).len(), 0);
+
+        manager.delete_snapshot(regular_id).unwrap();
+        assert_eq!(manager.list_snapshots().len(), 0);
     }
 }
