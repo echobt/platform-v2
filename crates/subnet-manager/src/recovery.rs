@@ -31,6 +31,18 @@ pub enum RecoveryAction {
     Pause,
     /// Resume subnet
     Resume,
+    /// Restore challenge from checkpoint
+    RestoreChallengeFromCheckpoint {
+        challenge_id: String,
+        checkpoint_id: uuid::Uuid,
+    },
+    /// Rollback challenge update
+    RollbackChallengeUpdate {
+        challenge_id: String,
+        reason: String,
+    },
+    /// Resume challenge after update
+    ResumeChallengeAfterUpdate { challenge_id: String },
 }
 
 /// Recovery attempt record
@@ -229,6 +241,37 @@ impl RecoveryManager {
                 self.current_attempts = 0;
                 (true, "Subnet resumed".to_string())
             }
+            RecoveryAction::RestoreChallengeFromCheckpoint {
+                challenge_id,
+                checkpoint_id,
+            } => {
+                // Signal challenge restoration - actual restore happens in orchestrator
+                info!(
+                    "Signaling restoration of challenge {} from checkpoint {}",
+                    challenge_id, checkpoint_id
+                );
+                (
+                    true,
+                    format!(
+                        "Challenge {} restore from checkpoint {} signaled",
+                        challenge_id, checkpoint_id
+                    ),
+                )
+            }
+            RecoveryAction::RollbackChallengeUpdate {
+                challenge_id,
+                reason,
+            } => {
+                warn!("Rolling back challenge {} update: {}", challenge_id, reason);
+                (
+                    true,
+                    format!("Challenge {} rollback initiated: {}", challenge_id, reason),
+                )
+            }
+            RecoveryAction::ResumeChallengeAfterUpdate { challenge_id } => {
+                info!("Resuming challenge {} after update", challenge_id);
+                (true, format!("Challenge {} resumed", challenge_id))
+            }
         };
 
         let attempt = RecoveryAttempt {
@@ -308,6 +351,40 @@ impl RecoveryManager {
     pub async fn manual_recovery(&mut self, action: RecoveryAction) -> RecoveryAttempt {
         self.execute_recovery(action).await
     }
+
+    /// Trigger challenge checkpoint restoration
+    pub async fn restore_challenge_checkpoint(
+        &mut self,
+        challenge_id: &str,
+        checkpoint_id: uuid::Uuid,
+    ) -> RecoveryAttempt {
+        self.execute_recovery(RecoveryAction::RestoreChallengeFromCheckpoint {
+            challenge_id: challenge_id.to_string(),
+            checkpoint_id,
+        })
+        .await
+    }
+
+    /// Trigger challenge update rollback
+    pub async fn rollback_challenge_update(
+        &mut self,
+        challenge_id: &str,
+        reason: &str,
+    ) -> RecoveryAttempt {
+        self.execute_recovery(RecoveryAction::RollbackChallengeUpdate {
+            challenge_id: challenge_id.to_string(),
+            reason: reason.to_string(),
+        })
+        .await
+    }
+
+    /// Resume challenge after successful update
+    pub async fn resume_challenge_after_update(&mut self, challenge_id: &str) -> RecoveryAttempt {
+        self.execute_recovery(RecoveryAction::ResumeChallengeAfterUpdate {
+            challenge_id: challenge_id.to_string(),
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -364,6 +441,17 @@ mod tests {
             },
             RecoveryAction::Pause,
             RecoveryAction::Resume,
+            RecoveryAction::RestoreChallengeFromCheckpoint {
+                challenge_id: "test-challenge".into(),
+                checkpoint_id: uuid::Uuid::new_v4(),
+            },
+            RecoveryAction::RollbackChallengeUpdate {
+                challenge_id: "test-challenge".into(),
+                reason: "test reason".into(),
+            },
+            RecoveryAction::ResumeChallengeAfterUpdate {
+                challenge_id: "test-challenge".into(),
+            },
         ];
 
         for action in actions {
@@ -1264,5 +1352,96 @@ mod tests {
         let decoded: RecoveryAttempt = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.reason, "test");
         assert!(decoded.success);
+    }
+
+    #[tokio::test]
+    async fn test_restore_challenge_checkpoint_recovery() {
+        let dir = tempdir().unwrap();
+        let config = RecoveryConfig::default();
+
+        let snapshots = Arc::new(RwLock::new(
+            SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap(),
+        ));
+        let updates = Arc::new(RwLock::new(UpdateManager::new(dir.path().to_path_buf())));
+
+        let mut manager =
+            RecoveryManager::new(config, dir.path().to_path_buf(), snapshots, updates);
+
+        let checkpoint_id = uuid::Uuid::new_v4();
+        let attempt = manager
+            .restore_challenge_checkpoint("test-challenge", checkpoint_id)
+            .await;
+
+        assert!(attempt.success);
+        assert!(attempt.details.contains("test-challenge"));
+        assert!(attempt.details.contains(&checkpoint_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_rollback_challenge_update_recovery() {
+        let dir = tempdir().unwrap();
+        let config = RecoveryConfig::default();
+
+        let snapshots = Arc::new(RwLock::new(
+            SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap(),
+        ));
+        let updates = Arc::new(RwLock::new(UpdateManager::new(dir.path().to_path_buf())));
+
+        let mut manager =
+            RecoveryManager::new(config, dir.path().to_path_buf(), snapshots, updates);
+
+        let attempt = manager
+            .rollback_challenge_update("test-challenge", "test failure")
+            .await;
+
+        assert!(attempt.success);
+        assert!(attempt.details.contains("test-challenge"));
+        assert!(attempt.details.contains("rollback"));
+    }
+
+    #[tokio::test]
+    async fn test_resume_challenge_after_update_recovery() {
+        let dir = tempdir().unwrap();
+        let config = RecoveryConfig::default();
+
+        let snapshots = Arc::new(RwLock::new(
+            SnapshotManager::new(dir.path().to_path_buf(), 3).unwrap(),
+        ));
+        let updates = Arc::new(RwLock::new(UpdateManager::new(dir.path().to_path_buf())));
+
+        let mut manager =
+            RecoveryManager::new(config, dir.path().to_path_buf(), snapshots, updates);
+
+        let attempt = manager
+            .resume_challenge_after_update("test-challenge")
+            .await;
+
+        assert!(attempt.success);
+        assert!(attempt.details.contains("test-challenge"));
+        assert!(attempt.details.contains("resumed"));
+    }
+
+    #[test]
+    fn test_challenge_recovery_action_serialization() {
+        let actions = vec![
+            RecoveryAction::RestoreChallengeFromCheckpoint {
+                challenge_id: "test".to_string(),
+                checkpoint_id: uuid::Uuid::new_v4(),
+            },
+            RecoveryAction::RollbackChallengeUpdate {
+                challenge_id: "test".to_string(),
+                reason: "failure".to_string(),
+            },
+            RecoveryAction::ResumeChallengeAfterUpdate {
+                challenge_id: "test".to_string(),
+            },
+        ];
+
+        for action in actions {
+            let json = serde_json::to_string(&action).unwrap();
+            let decoded: RecoveryAction = serde_json::from_str(&json).unwrap();
+            // Verify it deserializes without error by serializing again
+            let _ = serde_json::to_string(&decoded).unwrap();
+        }
     }
 }

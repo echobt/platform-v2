@@ -1226,6 +1226,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "challenge-template"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "platform-challenge-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"

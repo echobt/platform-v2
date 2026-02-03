@@ -8,6 +8,7 @@
 //! - Health monitoring
 //! - Graceful degradation
 
+pub mod challenge_hotreload;
 pub mod commands;
 pub mod config;
 pub mod health;
@@ -15,6 +16,7 @@ pub mod recovery;
 pub mod snapshot;
 pub mod update;
 
+pub use challenge_hotreload::*;
 pub use commands::*;
 pub use config::*;
 pub use health::*;
