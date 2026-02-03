@@ -1,0 +1,187 @@
+# =============================================================================
+# Platform Multi-Validator Sandbox Environment
+# =============================================================================
+# Local sandbox for testing P2P consensus with multiple validators.
+#
+# Usage:
+#   docker compose -f docker-compose.sandbox.yml up --build
+#
+# This creates 3 validators that discover each other via P2P and form consensus
+# without connecting to Bittensor (--no-bittensor mode).
+# =============================================================================
+
+services:
+  # ==========================================================================
+  # Validator 1 (Bootstrap Node)
+  # ==========================================================================
+  validator-1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: sandbox-validator-1
+    hostname: validator-1
+    restart: unless-stopped
+    
+    ports:
+      - "9001:9001"
+    
+    volumes:
+      - validator-1-data:/data
+    
+    environment:
+      RUST_LOG: ${RUST_LOG:-debug,platform_p2p_consensus=trace}
+      VALIDATOR_SECRET_KEY: ${SEED_1:-validator_sandbox_seed_1}
+      DATA_DIR: /data
+      NETUID: ${NETUID:-100}
+    
+    command:
+      - "--data-dir"
+      - "/data"
+      - "--listen-addr"
+      - "/ip4/0.0.0.0/tcp/9001"
+      - "--no-bittensor"
+      - "--bootstrap"
+      - "/dns4/validator-2/tcp/9002"
+      - "--bootstrap"
+      - "/dns4/validator-3/tcp/9003"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /data/distributed.db || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    
+    networks:
+      - sandbox-network
+
+  # ==========================================================================
+  # Validator 2
+  # ==========================================================================
+  validator-2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: sandbox-validator-2
+    hostname: validator-2
+    restart: unless-stopped
+    
+    ports:
+      - "9002:9002"
+    
+    volumes:
+      - validator-2-data:/data
+    
+    environment:
+      RUST_LOG: ${RUST_LOG:-debug,platform_p2p_consensus=trace}
+      VALIDATOR_SECRET_KEY: ${SEED_2:-validator_sandbox_seed_2}
+      DATA_DIR: /data
+      NETUID: ${NETUID:-100}
+    
+    command:
+      - "--data-dir"
+      - "/data"
+      - "--listen-addr"
+      - "/ip4/0.0.0.0/tcp/9002"
+      - "--no-bittensor"
+      - "--bootstrap"
+      - "/dns4/validator-1/tcp/9001"
+      - "--bootstrap"
+      - "/dns4/validator-3/tcp/9003"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /data/distributed.db || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    
+    networks:
+      - sandbox-network
+
+  # ==========================================================================
+  # Validator 3
+  # ==========================================================================
+  validator-3:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: sandbox-validator-3
+    hostname: validator-3
+    restart: unless-stopped
+    
+    ports:
+      - "9003:9003"
+    
+    volumes:
+      - validator-3-data:/data
+    
+    environment:
+      RUST_LOG: ${RUST_LOG:-debug,platform_p2p_consensus=trace}
+      VALIDATOR_SECRET_KEY: ${SEED_3:-validator_sandbox_seed_3}
+      DATA_DIR: /data
+      NETUID: ${NETUID:-100}
+    
+    command:
+      - "--data-dir"
+      - "/data"
+      - "--listen-addr"
+      - "/ip4/0.0.0.0/tcp/9003"
+      - "--no-bittensor"
+      - "--bootstrap"
+      - "/dns4/validator-1/tcp/9001"
+      - "--bootstrap"
+      - "/dns4/validator-2/tcp/9002"
+    
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /data/distributed.db || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    
+    networks:
+      - sandbox-network
+
+  # ==========================================================================
+  # Health Monitor (waits for all validators to be healthy)
+  # ==========================================================================
+  sandbox-ready:
+    image: alpine:3.19
+    container_name: sandbox-ready
+    
+    depends_on:
+      validator-1:
+        condition: service_healthy
+      validator-2:
+        condition: service_healthy
+      validator-3:
+        condition: service_healthy
+    
+    command: ["echo", "All validators are healthy and connected!"]
+    
+    networks:
+      - sandbox-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  validator-1-data:
+    driver: local
+  validator-2-data:
+    driver: local
+  validator-3-data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  sandbox-network:
+    driver: bridge
+    name: platform-sandbox
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
