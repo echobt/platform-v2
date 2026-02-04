@@ -133,7 +133,10 @@ impl WasmChallengeBackend {
         // This ensures the module is valid and has required exports
         if let Err(e) = self.runtime.evaluate(&wasm_code, &[]).await {
             // Only fail on compilation errors, not runtime errors
-            if matches!(e, WasmError::ModuleCompilation(_) | WasmError::InvalidBytecode(_)) {
+            if matches!(
+                e,
+                WasmError::ModuleCompilation(_) | WasmError::InvalidBytecode(_)
+            ) {
                 return Err(WasmBackendError::InvalidModule(e.to_string()).into());
             }
         }
@@ -191,7 +194,7 @@ impl WasmChallengeBackend {
             let challenges = self.challenges.read();
             let instance = challenges
                 .get(challenge_id)
-                .ok_or_else(|| WasmBackendError::ChallengeNotLoaded(*challenge_id))?;
+                .ok_or(WasmBackendError::ChallengeNotLoaded(*challenge_id))?;
             instance.wasm_code.clone()
         };
 
@@ -246,7 +249,10 @@ impl WasmChallengeBackend {
 
         // Validate the new WASM bytecode
         if let Err(e) = self.runtime.evaluate(&new_wasm_code, &[]).await {
-            if matches!(e, WasmError::ModuleCompilation(_) | WasmError::InvalidBytecode(_)) {
+            if matches!(
+                e,
+                WasmError::ModuleCompilation(_) | WasmError::InvalidBytecode(_)
+            ) {
                 return Err(WasmBackendError::InvalidModule(e.to_string()).into());
             }
         }
@@ -379,8 +385,14 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm_module();
 
-        let result = backend.load_challenge(challenge_id, wasm_code.clone()).await;
-        assert!(result.is_ok(), "load_challenge should succeed: {:?}", result);
+        let result = backend
+            .load_challenge(challenge_id, wasm_code.clone())
+            .await;
+        assert!(
+            result.is_ok(),
+            "load_challenge should succeed: {:?}",
+            result
+        );
 
         assert!(backend.is_loaded(&challenge_id));
         assert_eq!(backend.loaded_count(), 1);
@@ -424,7 +436,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.to_string().to_lowercase().contains("invalid") 
+            err.to_string().to_lowercase().contains("invalid")
                 || err.to_string().to_lowercase().contains("wasm")
                 || err.to_string().to_lowercase().contains("module"),
             "Expected WASM error, got: {}",
@@ -485,7 +497,11 @@ mod tests {
 
         assert!(result.is_ok(), "evaluate should succeed: {:?}", result);
         let score = result.expect("score should be returned");
-        assert!((score - 0.5).abs() < 0.001, "Score should be ~0.5, got {}", score);
+        assert!(
+            (score - 0.5).abs() < 0.001,
+            "Score should be ~0.5, got {}",
+            score
+        );
     }
 
     #[tokio::test]
@@ -649,7 +665,10 @@ mod tests {
         assert!((s3 - 0.75).abs() < 0.001);
 
         // Unload one
-        backend.unload_challenge(&id2).await.expect("unload should succeed");
+        backend
+            .unload_challenge(&id2)
+            .await
+            .expect("unload should succeed");
         assert_eq!(backend.loaded_count(), 2);
         assert!(backend.is_loaded(&id1));
         assert!(!backend.is_loaded(&id2));
@@ -659,7 +678,8 @@ mod tests {
     #[tokio::test]
     async fn test_wasm_backend_concurrent_evaluations() {
         let config = WasmRuntimeConfig::minimal();
-        let backend = Arc::new(WasmChallengeBackend::new(config).expect("backend should be created"));
+        let backend =
+            Arc::new(WasmChallengeBackend::new(config).expect("backend should be created"));
 
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm_module();
@@ -675,7 +695,9 @@ mod tests {
             let backend_clone = Arc::clone(&backend);
             let handle = tokio::spawn(async move {
                 let input = format!("test input {}", i);
-                backend_clone.evaluate(&challenge_id, input.as_bytes()).await
+                backend_clone
+                    .evaluate(&challenge_id, input.as_bytes())
+                    .await
             });
             handles.push(handle);
         }

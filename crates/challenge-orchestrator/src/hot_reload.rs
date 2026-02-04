@@ -93,11 +93,7 @@ pub struct ChallengeVersion {
 
 impl ChallengeVersion {
     /// Create a new challenge version from WASM code
-    pub fn from_wasm_code(
-        challenge_id: ChallengeId,
-        version: String,
-        wasm_code: &[u8],
-    ) -> Self {
+    pub fn from_wasm_code(challenge_id: ChallengeId, version: String, wasm_code: &[u8]) -> Self {
         Self {
             challenge_id,
             version,
@@ -421,11 +417,8 @@ impl HotReloadManager {
         }
 
         // Create new version info
-        let new_version_info = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            new_version.clone(),
-            &new_wasm_code,
-        );
+        let new_version_info =
+            ChallengeVersion::from_wasm_code(challenge_id, new_version.clone(), &new_wasm_code);
 
         // Store the current WASM as previous before updating
         if self.config.keep_previous_version {
@@ -496,7 +489,9 @@ impl HotReloadManager {
                 );
 
                 // Update version tracking
-                self.versions.write().insert(*challenge_id, rollback_version);
+                self.versions
+                    .write()
+                    .insert(*challenge_id, rollback_version);
 
                 // Clear the previous version (can only rollback once)
                 self.previous_versions.write().remove(challenge_id);
@@ -608,7 +603,9 @@ impl HotReloadManager {
     /// This should be called before a reload to preserve the current state.
     pub fn store_previous_version(&self, challenge_id: ChallengeId, wasm_code: Vec<u8>) {
         if self.config.keep_previous_version {
-            self.previous_versions.write().insert(challenge_id, wasm_code);
+            self.previous_versions
+                .write()
+                .insert(challenge_id, wasm_code);
             debug!(
                 challenge_id = %challenge_id,
                 "Stored previous version for rollback"
@@ -723,11 +720,8 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm();
 
-        let version = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1.0.0".to_string(),
-            &wasm_code,
-        );
+        let version =
+            ChallengeVersion::from_wasm_code(challenge_id, "v1.0.0".to_string(), &wasm_code);
 
         assert_eq!(version.challenge_id, challenge_id);
         assert_eq!(version.version, "v1.0.0");
@@ -740,16 +734,8 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm();
 
-        let v1 = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1".to_string(),
-            &wasm_code,
-        );
-        let v2 = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v2".to_string(),
-            &wasm_code,
-        );
+        let v1 = ChallengeVersion::from_wasm_code(challenge_id, "v1".to_string(), &wasm_code);
+        let v2 = ChallengeVersion::from_wasm_code(challenge_id, "v2".to_string(), &wasm_code);
 
         // Same code should produce same hash
         assert_eq!(v1.code_hash, v2.code_hash);
@@ -761,16 +747,8 @@ mod tests {
         let wasm_v1 = create_test_wasm();
         let wasm_v2 = create_test_wasm_v2();
 
-        let v1 = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1".to_string(),
-            &wasm_v1,
-        );
-        let v2 = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v2".to_string(),
-            &wasm_v2,
-        );
+        let v1 = ChallengeVersion::from_wasm_code(challenge_id, "v1".to_string(), &wasm_v1);
+        let v2 = ChallengeVersion::from_wasm_code(challenge_id, "v2".to_string(), &wasm_v2);
 
         // Different code should produce different hash
         assert_ne!(v1.code_hash, v2.code_hash);
@@ -797,11 +775,8 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm();
 
-        let version = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1.0.0".to_string(),
-            &wasm_code,
-        );
+        let version =
+            ChallengeVersion::from_wasm_code(challenge_id, "v1.0.0".to_string(), &wasm_code);
 
         manager.track_version(version.clone());
 
@@ -821,11 +796,8 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm();
 
-        let version = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1.0.0".to_string(),
-            &wasm_code,
-        );
+        let version =
+            ChallengeVersion::from_wasm_code(challenge_id, "v1.0.0".to_string(), &wasm_code);
 
         manager.track_version(version);
         assert_eq!(manager.tracked_count(), 1);
@@ -850,11 +822,8 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm();
 
-        let version = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1.0.0".to_string(),
-            &wasm_code,
-        );
+        let version =
+            ChallengeVersion::from_wasm_code(challenge_id, "v1.0.0".to_string(), &wasm_code);
         let code_hash = version.code_hash.clone();
 
         manager.track_version(version);
@@ -869,11 +838,8 @@ mod tests {
         let challenge_id = ChallengeId::new();
         let wasm_code = create_test_wasm();
 
-        let version = ChallengeVersion::from_wasm_code(
-            challenge_id,
-            "v1.0.0".to_string(),
-            &wasm_code,
-        );
+        let version =
+            ChallengeVersion::from_wasm_code(challenge_id, "v1.0.0".to_string(), &wasm_code);
 
         manager.track_version(version);
 
@@ -993,9 +959,7 @@ mod tests {
         manager.reload_state.write().start_reload(challenge_id);
 
         let wasm = create_test_wasm();
-        let result = manager
-            .reload(challenge_id, wasm, "v1".to_string())
-            .await;
+        let result = manager.reload(challenge_id, wasm, "v1".to_string()).await;
 
         assert!(result.is_err());
         match result.err().expect("expected error") {
@@ -1060,7 +1024,11 @@ mod tests {
 
         // Rollback
         let result = manager.rollback(&challenge_id).await;
-        assert!(result.is_ok(), "rollback should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "rollback should succeed: {:?}",
+            result.err()
+        );
 
         // Verify rollback happened
         let version = manager.get_version(&challenge_id);
@@ -1123,7 +1091,10 @@ mod tests {
         // Use try_recv since we're in a sync test
         let event = rx.try_recv().expect("should receive event");
         match event {
-            ReloadEvent::NewVersion { challenge_id: id, version } => {
+            ReloadEvent::NewVersion {
+                challenge_id: id,
+                version,
+            } => {
                 assert_eq!(id, challenge_id);
                 assert_eq!(version, "v2.0.0");
             }

@@ -191,7 +191,11 @@ impl WasmEvaluationInput {
     /// * `submission_id` - Unique submission identifier
     /// * `participant_id` - Participant identifier
     /// * `data` - Raw submission data
-    pub fn new(submission_id: impl Into<String>, participant_id: impl Into<String>, data: Vec<u8>) -> Self {
+    pub fn new(
+        submission_id: impl Into<String>,
+        participant_id: impl Into<String>,
+        data: Vec<u8>,
+    ) -> Self {
         Self {
             submission_id: submission_id.into(),
             participant_id: participant_id.into(),
@@ -525,7 +529,8 @@ impl From<&WasmEvaluationInput> for BincodeEvaluationInput {
             submission_id: input.submission_id.clone(),
             participant_id: input.participant_id.clone(),
             data: input.data.clone(),
-            metadata_json: serde_json::to_string(&input.metadata).unwrap_or_else(|_| "{}".to_string()),
+            metadata_json: serde_json::to_string(&input.metadata)
+                .unwrap_or_else(|_| "{}".to_string()),
         }
     }
 }
@@ -558,7 +563,8 @@ impl From<&WasmEvaluationOutput> for BincodeEvaluationOutput {
         Self {
             score: output.score,
             is_valid: output.is_valid,
-            results_json: serde_json::to_string(&output.results).unwrap_or_else(|_| "{}".to_string()),
+            results_json: serde_json::to_string(&output.results)
+                .unwrap_or_else(|_| "{}".to_string()),
             error: output.error.clone(),
         }
     }
@@ -594,12 +600,12 @@ pub fn serialize_input(
     format: SerializationFormat,
 ) -> Result<Vec<u8>, WasmSerializeError> {
     match format {
-        SerializationFormat::Json => {
-            serde_json::to_vec(input).map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
-        }
+        SerializationFormat::Json => serde_json::to_vec(input)
+            .map_err(|e| WasmSerializeError::SerializationFailed(e.to_string())),
         SerializationFormat::Bincode => {
             let bincode_input = BincodeEvaluationInput::from(input);
-            bincode::serialize(&bincode_input).map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
+            bincode::serialize(&bincode_input)
+                .map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
         }
     }
 }
@@ -619,9 +625,8 @@ pub fn deserialize_input(
     format: SerializationFormat,
 ) -> Result<WasmEvaluationInput, WasmSerializeError> {
     match format {
-        SerializationFormat::Json => {
-            serde_json::from_slice(data).map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string()))
-        }
+        SerializationFormat::Json => serde_json::from_slice(data)
+            .map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string())),
         SerializationFormat::Bincode => {
             let bincode_input: BincodeEvaluationInput = bincode::deserialize(data)
                 .map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string()))?;
@@ -645,12 +650,12 @@ pub fn serialize_output(
     format: SerializationFormat,
 ) -> Result<Vec<u8>, WasmSerializeError> {
     match format {
-        SerializationFormat::Json => {
-            serde_json::to_vec(output).map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
-        }
+        SerializationFormat::Json => serde_json::to_vec(output)
+            .map_err(|e| WasmSerializeError::SerializationFailed(e.to_string())),
         SerializationFormat::Bincode => {
             let bincode_output = BincodeEvaluationOutput::from(output);
-            bincode::serialize(&bincode_output).map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
+            bincode::serialize(&bincode_output)
+                .map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
         }
     }
 }
@@ -670,9 +675,8 @@ pub fn deserialize_output(
     format: SerializationFormat,
 ) -> Result<WasmEvaluationOutput, WasmSerializeError> {
     match format {
-        SerializationFormat::Json => {
-            serde_json::from_slice(data).map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string()))
-        }
+        SerializationFormat::Json => serde_json::from_slice(data)
+            .map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string())),
         SerializationFormat::Bincode => {
             let bincode_output: BincodeEvaluationOutput = bincode::deserialize(data)
                 .map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string()))?;
@@ -696,12 +700,10 @@ pub fn serialize_validation_result(
     format: SerializationFormat,
 ) -> Result<Vec<u8>, WasmSerializeError> {
     match format {
-        SerializationFormat::Json => {
-            serde_json::to_vec(result).map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
-        }
-        SerializationFormat::Bincode => {
-            bincode::serialize(result).map_err(|e| WasmSerializeError::SerializationFailed(e.to_string()))
-        }
+        SerializationFormat::Json => serde_json::to_vec(result)
+            .map_err(|e| WasmSerializeError::SerializationFailed(e.to_string())),
+        SerializationFormat::Bincode => bincode::serialize(result)
+            .map_err(|e| WasmSerializeError::SerializationFailed(e.to_string())),
     }
 }
 
@@ -720,12 +722,10 @@ pub fn deserialize_validation_result(
     format: SerializationFormat,
 ) -> Result<WasmValidationResult, WasmSerializeError> {
     match format {
-        SerializationFormat::Json => {
-            serde_json::from_slice(data).map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string()))
-        }
-        SerializationFormat::Bincode => {
-            bincode::deserialize(data).map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string()))
-        }
+        SerializationFormat::Json => serde_json::from_slice(data)
+            .map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string())),
+        SerializationFormat::Bincode => bincode::deserialize(data)
+            .map_err(|e| WasmSerializeError::DeserializationFailed(e.to_string())),
     }
 }
 
@@ -829,7 +829,7 @@ impl WasmChallengeMetadata {
             description: None,
             author: None,
             serialization_format: "json".to_string(),
-            memory_pages: 16, // 1MB default
+            memory_pages: 16,         // 1MB default
             max_eval_time_ms: 30_000, // 30 seconds default
         }
     }
@@ -950,7 +950,8 @@ mod tests {
     #[test]
     fn test_wasm_evaluation_input_with_metadata() {
         let metadata = serde_json::json!({"task": "test", "difficulty": 5});
-        let input = WasmEvaluationInput::with_metadata("sub-2", "part-2", vec![4, 5, 6], metadata.clone());
+        let input =
+            WasmEvaluationInput::with_metadata("sub-2", "part-2", vec![4, 5, 6], metadata.clone());
         assert_eq!(input.submission_id, "sub-2");
         assert_eq!(input.metadata, metadata);
     }
@@ -1048,8 +1049,10 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_input_json() {
         let input = WasmEvaluationInput::new("sub", "part", vec![1, 2, 3]);
-        let serialized = serialize_input(&input, SerializationFormat::Json).expect("serialize failed");
-        let deserialized = deserialize_input(&serialized, SerializationFormat::Json).expect("deserialize failed");
+        let serialized =
+            serialize_input(&input, SerializationFormat::Json).expect("serialize failed");
+        let deserialized =
+            deserialize_input(&serialized, SerializationFormat::Json).expect("deserialize failed");
         assert_eq!(input, deserialized);
     }
 
@@ -1061,33 +1064,41 @@ mod tests {
             vec![1, 2, 3],
             serde_json::json!({"key": "value"}),
         );
-        let serialized = serialize_input(&input, SerializationFormat::Bincode).expect("serialize failed");
-        let deserialized = deserialize_input(&serialized, SerializationFormat::Bincode).expect("deserialize failed");
+        let serialized =
+            serialize_input(&input, SerializationFormat::Bincode).expect("serialize failed");
+        let deserialized = deserialize_input(&serialized, SerializationFormat::Bincode)
+            .expect("deserialize failed");
         assert_eq!(input, deserialized);
     }
 
     #[test]
     fn test_serialize_deserialize_output_json() {
-        let output = WasmEvaluationOutput::success_with_results(0.85, serde_json::json!({"test": true}));
-        let serialized = serialize_output(&output, SerializationFormat::Json).expect("serialize failed");
-        let deserialized = deserialize_output(&serialized, SerializationFormat::Json).expect("deserialize failed");
+        let output =
+            WasmEvaluationOutput::success_with_results(0.85, serde_json::json!({"test": true}));
+        let serialized =
+            serialize_output(&output, SerializationFormat::Json).expect("serialize failed");
+        let deserialized =
+            deserialize_output(&serialized, SerializationFormat::Json).expect("deserialize failed");
         assert_eq!(output, deserialized);
     }
 
     #[test]
     fn test_serialize_deserialize_output_bincode() {
         let output = WasmEvaluationOutput::failure("test error");
-        let serialized = serialize_output(&output, SerializationFormat::Bincode).expect("serialize failed");
-        let deserialized = deserialize_output(&serialized, SerializationFormat::Bincode).expect("deserialize failed");
+        let serialized =
+            serialize_output(&output, SerializationFormat::Bincode).expect("serialize failed");
+        let deserialized = deserialize_output(&serialized, SerializationFormat::Bincode)
+            .expect("deserialize failed");
         assert_eq!(output, deserialized);
     }
 
     #[test]
     fn test_serialize_deserialize_validation_result() {
         let result = WasmValidationResult::invalid("test");
-        let serialized = serialize_validation_result(&result, SerializationFormat::Json).expect("serialize failed");
-        let deserialized =
-            deserialize_validation_result(&serialized, SerializationFormat::Json).expect("deserialize failed");
+        let serialized = serialize_validation_result(&result, SerializationFormat::Json)
+            .expect("serialize failed");
+        let deserialized = deserialize_validation_result(&serialized, SerializationFormat::Json)
+            .expect("deserialize failed");
         assert_eq!(result, deserialized);
     }
 
@@ -1099,9 +1110,16 @@ mod tests {
             vec![0; 100],
             serde_json::json!({"key": "value", "nested": {"a": 1, "b": 2}}),
         );
-        let json_size = serialize_input(&input, SerializationFormat::Json).unwrap().len();
-        let bincode_size = serialize_input(&input, SerializationFormat::Bincode).unwrap().len();
-        assert!(bincode_size < json_size, "bincode should be smaller than json");
+        let json_size = serialize_input(&input, SerializationFormat::Json)
+            .unwrap()
+            .len();
+        let bincode_size = serialize_input(&input, SerializationFormat::Bincode)
+            .unwrap()
+            .len();
+        assert!(
+            bincode_size < json_size,
+            "bincode should be smaller than json"
+        );
     }
 
     #[test]
@@ -1109,7 +1127,7 @@ mod tests {
         let invalid_data = b"not valid json or bincode";
         let json_result = deserialize_input(invalid_data, SerializationFormat::Json);
         assert!(json_result.is_err());
-        
+
         let bincode_result = deserialize_input(invalid_data, SerializationFormat::Bincode);
         assert!(bincode_result.is_err());
     }
@@ -1145,7 +1163,8 @@ mod tests {
     fn test_decode_from_wasm() {
         let output = WasmEvaluationOutput::success(0.5);
         let serialized = serialize_output(&output, SerializationFormat::Json).unwrap();
-        let decoded = decode_from_wasm(&serialized, SerializationFormat::Json).expect("decode failed");
+        let decoded =
+            decode_from_wasm(&serialized, SerializationFormat::Json).expect("decode failed");
         assert_eq!(output, decoded);
     }
 
@@ -1182,10 +1201,12 @@ mod tests {
 
     #[test]
     fn test_wasm_challenge_metadata_get_format() {
-        let json_meta = WasmChallengeMetadata::new("t", "1").with_serialization_format(SerializationFormat::Json);
+        let json_meta = WasmChallengeMetadata::new("t", "1")
+            .with_serialization_format(SerializationFormat::Json);
         assert_eq!(json_meta.get_format(), SerializationFormat::Json);
 
-        let bincode_meta = WasmChallengeMetadata::new("t", "1").with_serialization_format(SerializationFormat::Bincode);
+        let bincode_meta = WasmChallengeMetadata::new("t", "1")
+            .with_serialization_format(SerializationFormat::Bincode);
         assert_eq!(bincode_meta.get_format(), SerializationFormat::Bincode);
     }
 
@@ -1236,7 +1257,7 @@ mod tests {
     #[test]
     fn test_full_evaluation_cycle() {
         // Simulate a complete evaluation cycle
-        
+
         // 1. Create input
         let input = WasmEvaluationInput::with_metadata(
             "submission-123",
@@ -1250,7 +1271,8 @@ mod tests {
         assert!(!buffer.is_empty());
 
         // 3. Deserialize in "WASM" (simulated)
-        let decoded_input = deserialize_input(&buffer.data, SerializationFormat::Json).expect("deserialize failed");
+        let decoded_input =
+            deserialize_input(&buffer.data, SerializationFormat::Json).expect("deserialize failed");
         assert_eq!(decoded_input.submission_id, "submission-123");
 
         // 4. Process and create output
@@ -1260,10 +1282,12 @@ mod tests {
         );
 
         // 5. Serialize output
-        let output_bytes = serialize_output(&output, SerializationFormat::Json).expect("serialize failed");
+        let output_bytes =
+            serialize_output(&output, SerializationFormat::Json).expect("serialize failed");
 
         // 6. Deserialize in host
-        let final_output = decode_from_wasm(&output_bytes, SerializationFormat::Json).expect("decode failed");
+        let final_output =
+            decode_from_wasm(&output_bytes, SerializationFormat::Json).expect("decode failed");
         assert!((final_output.score - 0.95).abs() < f64::EPSILON);
         assert!(final_output.is_valid);
     }

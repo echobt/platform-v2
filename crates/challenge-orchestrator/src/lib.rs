@@ -48,16 +48,16 @@ pub use config::*;
 pub use docker::{ChallengeDocker, CleanupResult, DockerClient};
 pub use evaluator::*;
 pub use health::*;
-pub use lifecycle::*;
 pub use hot_reload::{
     ChallengeVersion, HotReloadConfig, HotReloadError, HotReloadManager, ReloadEvent,
 };
-pub use wasm_backend::{WasmBackendError, WasmChallengeBackend, WasmChallengeInstance};
-pub use wasm_runtime::{WasmError, WasmRuntime, WasmRuntimeConfig};
+pub use lifecycle::*;
 use parking_lot::RwLock;
 use platform_core::ChallengeId;
 use std::collections::HashMap;
 use std::sync::Arc;
+pub use wasm_backend::{WasmBackendError, WasmChallengeBackend, WasmChallengeInstance};
+pub use wasm_runtime::{WasmError, WasmRuntime, WasmRuntimeConfig};
 
 /// High-level façade that keeps container state, evaluator access, and health
 /// monitoring in sync for every registered challenge.

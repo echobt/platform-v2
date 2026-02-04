@@ -161,8 +161,8 @@ impl WasmRuntime {
         engine_config.cranelift_opt_level(wasmtime::OptLevel::Speed);
 
         // Create the engine
-        let engine = Engine::new(&engine_config)
-            .map_err(|e| WasmError::EngineCreation(e.to_string()))?;
+        let engine =
+            Engine::new(&engine_config).map_err(|e| WasmError::EngineCreation(e.to_string()))?;
 
         Ok(Self {
             engine: Arc::new(engine),
@@ -378,7 +378,7 @@ impl WasmRuntime {
         let offset: usize = 0;
 
         // Ensure memory is large enough
-        let required_pages = ((data.len() + 65535) / 65536) as u64; // Round up to pages
+        let required_pages = data.len().div_ceil(65536) as u64;
         let current_pages = memory.size(&*store);
 
         if current_pages < required_pages {

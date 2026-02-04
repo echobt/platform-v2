@@ -178,7 +178,8 @@ impl StorageConsensus {
         let timestamp = chrono::Utc::now().timestamp_millis();
 
         // Generate unique request ID from components
-        let request_id = generate_request_id(&challenge_id, &submission_hash, &requester, timestamp);
+        let request_id =
+            generate_request_id(&challenge_id, &submission_hash, &requester, timestamp);
 
         let request = StorageVerifyRequest {
             request_id: request_id.clone(),
@@ -341,10 +342,7 @@ impl StorageConsensus {
     pub fn check_consensus(&self, request_id: &str) -> Option<ConsensusResult> {
         let pending = self.pending_requests.read();
 
-        let verification = match pending.get(request_id) {
-            Some(v) => v,
-            None => return None,
-        };
+        let verification = pending.get(request_id)?;
 
         let responses = &verification.responses;
 
@@ -378,9 +376,7 @@ impl StorageConsensus {
                 let stake: u64 = validators
                     .iter()
                     .filter_map(|(hotkey, _)| {
-                        self.validator_set
-                            .get_validator(hotkey)
-                            .map(|v| v.stake)
+                        self.validator_set.get_validator(hotkey).map(|v| v.stake)
                     })
                     .sum();
                 let values = validators
@@ -408,7 +404,9 @@ impl StorageConsensus {
         let stake_percentage = *agreeing_stake as f64 / total_stake as f64;
         let agreeing_validators = responses
             .iter()
-            .filter(|(_, r)| compute_values_hash(&r.values) == compute_values_hash(&consensus_values))
+            .filter(|(_, r)| {
+                compute_values_hash(&r.values) == compute_values_hash(consensus_values)
+            })
             .count();
 
         let verified = stake_percentage >= self.config.quorum_percentage
@@ -515,8 +513,8 @@ fn generate_request_id(
     let mut hasher = Sha256::new();
     hasher.update(challenge_id.to_string().as_bytes());
     hasher.update(submission_hash.as_bytes());
-    hasher.update(&requester.0);
-    hasher.update(&timestamp.to_le_bytes());
+    hasher.update(requester.0);
+    hasher.update(timestamp.to_le_bytes());
     let hash: [u8; 32] = hasher.finalize().into();
     hex::encode(&hash[..16]) // Use first 16 bytes for reasonable length
 }
@@ -577,7 +575,8 @@ mod tests {
         let submission_hash = "abc123".to_string();
         let requester = Hotkey([1u8; 32]);
 
-        let request = consensus.create_request(challenge_id, submission_hash.clone(), requester.clone());
+        let request =
+            consensus.create_request(challenge_id, submission_hash.clone(), requester.clone());
 
         assert!(!request.request_id.is_empty());
         assert_eq!(request.challenge_id, challenge_id);
@@ -621,7 +620,8 @@ mod tests {
     #[test]
     fn test_consensus_reached() {
         let (validator_set, keypairs) = create_test_validators(3);
-        let consensus = StorageConsensus::new(validator_set.clone(), StorageConsensusConfig::for_testing());
+        let consensus =
+            StorageConsensus::new(validator_set.clone(), StorageConsensusConfig::for_testing());
 
         // Create a request
         let challenge_id = ChallengeId::new();
@@ -715,7 +715,8 @@ mod tests {
     #[test]
     fn test_duplicate_response_ignored() {
         let (validator_set, keypairs) = create_test_validators(2);
-        let consensus = StorageConsensus::new(validator_set.clone(), StorageConsensusConfig::for_testing());
+        let consensus =
+            StorageConsensus::new(validator_set.clone(), StorageConsensusConfig::for_testing());
 
         let challenge_id = ChallengeId::new();
         let request = consensus.create_request(
@@ -745,11 +746,8 @@ mod tests {
         let consensus = StorageConsensus::new(validator_set, StorageConsensusConfig::for_testing());
 
         let challenge_id = ChallengeId::new();
-        let request = consensus.create_request(
-            challenge_id,
-            "submission123".to_string(),
-            Hotkey([1u8; 32]),
-        );
+        let request =
+            consensus.create_request(challenge_id, "submission123".to_string(), Hotkey([1u8; 32]));
 
         // Create response from unknown validator
         let unknown_kp = Keypair::generate();
@@ -884,11 +882,8 @@ mod tests {
         let consensus = StorageConsensus::new(validator_set, config);
 
         let challenge_id = ChallengeId::new();
-        let request = consensus.create_request(
-            challenge_id,
-            "submission123".to_string(),
-            Hotkey([1u8; 32]),
-        );
+        let request =
+            consensus.create_request(challenge_id, "submission123".to_string(), Hotkey([1u8; 32]));
 
         // Check consensus without any responses - should return None
         let result = consensus.check_consensus(&request.request_id);
@@ -940,7 +935,8 @@ mod tests {
         }];
 
         // Submit high stake response
-        let high_response = consensus.handle_request(&request, high_stake_values.clone(), 100, &high_stake_kp);
+        let high_response =
+            consensus.handle_request(&request, high_stake_values.clone(), 100, &high_stake_kp);
         consensus.handle_response(high_response);
 
         // Submit low stake response

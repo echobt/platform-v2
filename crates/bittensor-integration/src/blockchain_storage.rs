@@ -475,7 +475,10 @@ impl BlockchainStorage {
     /// 4. Stores the result on chain
     ///
     /// Returns the transaction hash on success.
-    pub async fn store_validation(&self, result: &ValidationResult) -> Result<String, StorageError> {
+    pub async fn store_validation(
+        &self,
+        result: &ValidationResult,
+    ) -> Result<String, StorageError> {
         // Validate the result first
         result.validate()?;
 
@@ -492,11 +495,17 @@ impl BlockchainStorage {
 
         // Parse validator hotkey and check assignment
         if self.config.verify_assignments {
-            let validator_hotkey = Hotkey::from_ss58(&result.validator_hotkey)
-                .ok_or_else(|| StorageError::InvalidConfig("Invalid validator hotkey".to_string()))?;
+            let validator_hotkey =
+                Hotkey::from_ss58(&result.validator_hotkey).ok_or_else(|| {
+                    StorageError::InvalidConfig("Invalid validator hotkey".to_string())
+                })?;
 
             let is_assigned = self
-                .is_task_assigned(&result.challenge_id, &result.submission_hash, &validator_hotkey)
+                .is_task_assigned(
+                    &result.challenge_id,
+                    &result.submission_hash,
+                    &validator_hotkey,
+                )
                 .await?;
 
             if !is_assigned {
@@ -510,11 +519,17 @@ impl BlockchainStorage {
 
         // Check if already stored on chain
         if self.config.check_duplicates {
-            let validator_hotkey = Hotkey::from_ss58(&result.validator_hotkey)
-                .ok_or_else(|| StorageError::InvalidConfig("Invalid validator hotkey".to_string()))?;
+            let validator_hotkey =
+                Hotkey::from_ss58(&result.validator_hotkey).ok_or_else(|| {
+                    StorageError::InvalidConfig("Invalid validator hotkey".to_string())
+                })?;
 
             let already_stored = self
-                .has_stored_validation(&result.challenge_id, &result.submission_hash, &validator_hotkey)
+                .has_stored_validation(
+                    &result.challenge_id,
+                    &result.submission_hash,
+                    &validator_hotkey,
+                )
                 .await?;
 
             if already_stored {
@@ -778,10 +793,7 @@ impl BlockchainStorage {
         match tx_result {
             Ok(inner) => inner,
             Err(_) => {
-                warn!(
-                    "Timeout storing validation for {}",
-                    result.storage_key()
-                );
+                warn!("Timeout storing validation for {}", result.storage_key());
                 Err(StorageError::Timeout)
             }
         }
@@ -948,7 +960,10 @@ mod tests {
         assert_eq!(config.netuid, 100);
         assert_eq!(config.max_retries, DEFAULT_MAX_RETRIES);
         assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
-        assert_eq!(config.min_consensus_validators, DEFAULT_MIN_CONSENSUS_VALIDATORS);
+        assert_eq!(
+            config.min_consensus_validators,
+            DEFAULT_MIN_CONSENSUS_VALIDATORS
+        );
         assert!(config.verify_assignments);
         assert!(config.check_duplicates);
     }
@@ -1264,9 +1279,7 @@ mod tests {
         let storage = BlockchainStorage::new(client, storage_config);
 
         let challenge_id = ChallengeId::new();
-        let results = storage
-            .read_validations(&challenge_id, "test_hash")
-            .await;
+        let results = storage.read_validations(&challenge_id, "test_hash").await;
 
         assert!(results.is_ok());
         assert!(results.unwrap().is_empty());
@@ -1429,12 +1442,8 @@ mod tests {
         // Manually add assignment to cache
         {
             let mut cache = storage.cache.write().await;
-            let assignment = TaskAssignment::new(
-                challenge_id,
-                "hash1".to_string(),
-                validator.to_ss58(),
-                3600,
-            );
+            let assignment =
+                TaskAssignment::new(challenge_id, "hash1".to_string(), validator.to_ss58(), 3600);
             cache.add_assignment(assignment);
         }
 
