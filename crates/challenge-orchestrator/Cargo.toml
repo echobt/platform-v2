@@ -10,6 +10,9 @@ description = "Docker-based challenge container orchestration for Mini-Chain"
 platform-core = { path = "../core" }
 secure-container-runtime = { path = "../secure-container-runtime" }
 
+# WASM runtime
+wasmtime = { version = "27.0", features = ["async", "component-model"] }
+
 # Async
 tokio = { workspace = true }
 futures = { workspace = true }
@@ -21,6 +24,10 @@ bollard = "0.18"
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Cryptography
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # HTTP client for challenge communication
 reqwest = { version = "0.12", features = ["json"] }
@@ -42,3 +49,4 @@ hostname = "0.4"
 tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.2"
+wat = "1.244"
