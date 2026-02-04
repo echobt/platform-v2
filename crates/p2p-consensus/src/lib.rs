@@ -39,6 +39,7 @@ pub mod consensus;
 pub mod messages;
 pub mod network;
 pub mod state;
+pub mod storage_consensus;
 pub mod validator;
 
 // Re-export main types
@@ -58,6 +59,10 @@ pub use network::{
 pub use state::{
     build_merkle_proof, compute_merkle_root, verify_merkle_proof, ChainState, ChallengeConfig,
     EvaluationRecord, StateError, StateManager, ValidatorEvaluation, WeightVotes,
+};
+pub use storage_consensus::{
+    ConsensusResult, StorageConsensus, StorageConsensusConfig, StorageVerifyRequest,
+    StorageVerifyResponse, StoredValidation,
 };
 pub use validator::{
     LeaderElection, StakeWeightedVoting, ValidatorError, ValidatorRecord, ValidatorSet,

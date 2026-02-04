@@ -9,11 +9,13 @@
 //! - Block subscription for epoch synchronization
 //! - Weight submission via mechanism-based batching
 //! - Concurrent weight collection from challenge endpoints
+//! - Direct blockchain storage for validation results
 //!
 //! The `BlockSync` module subscribes to finalized Bittensor blocks
 //! to synchronize platform epochs with on-chain state.
 
 mod block_sync;
+mod blockchain_storage;
 mod challenge_weight_collector;
 mod client;
 mod config;
@@ -28,6 +30,7 @@ pub mod mock;
 mod tests;
 
 pub use block_sync::*;
+pub use blockchain_storage::*;
 pub use challenge_weight_collector::*;
 pub use client::*;
 pub use config::*;
