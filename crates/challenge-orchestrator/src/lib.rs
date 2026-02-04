@@ -31,6 +31,7 @@ pub mod config;
 pub mod docker;
 pub mod evaluator;
 pub mod health;
+pub mod hot_reload;
 pub mod lifecycle;
 pub mod wasm_backend;
 pub mod wasm_runtime;
@@ -48,6 +49,9 @@ pub use docker::{ChallengeDocker, CleanupResult, DockerClient};
 pub use evaluator::*;
 pub use health::*;
 pub use lifecycle::*;
+pub use hot_reload::{
+    ChallengeVersion, HotReloadConfig, HotReloadError, HotReloadManager, ReloadEvent,
+};
 pub use wasm_backend::{WasmBackendError, WasmChallengeBackend, WasmChallengeInstance};
 pub use wasm_runtime::{WasmError, WasmRuntime, WasmRuntimeConfig};
 use parking_lot::RwLock;
