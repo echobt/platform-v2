@@ -97,6 +97,8 @@ pub mod submission_types;
 pub mod test_challenge;
 /// Core types
 pub mod types;
+/// WASM challenge interface and adapter
+pub mod wasm_challenge;
 /// Weight calculation types
 pub mod weight_types;
 /// Weight calculation utilities
@@ -124,6 +126,7 @@ pub use routes::*;
 pub use submission_types::*;
 pub use test_challenge::SimpleTestChallenge;
 pub use types::*;
+pub use wasm_challenge::*;
 pub use weight_types::*;
 pub use weights::*;
 
