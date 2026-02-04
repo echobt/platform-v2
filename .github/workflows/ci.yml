@@ -64,6 +64,24 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace -E 'not (test(/live/) | test(/integration/))'
 
+  # Sandbox integration tests - tests multi-validator consensus
+  sandbox-tests:
+    name: Sandbox Integration Tests
+    runs-on: platform-runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "platform-ci"
+          save-if: false
+
+      - name: Run sandbox multi-validator tests
+        run: cargo nextest run --package platform-e2e-tests --test sandbox_multi_validator_tests
+
   # Coverage runs in a separate job with its own concurrency group
   # This prevents coverage deployment from being cancelled by new commits
   coverage:
@@ -126,11 +144,11 @@ jobs:
           destination_dir: badges
           keep_files: true
 
-  # Docker only runs after build, clippy and test pass
+  # Docker only runs after build, clippy, test, and sandbox-tests pass
   docker:
     name: Docker
     runs-on: platform-runner
-    needs: [build, clippy, test]
+    needs: [build, clippy, test, sandbox-tests]
     permissions:
       contents: read
       packages: write

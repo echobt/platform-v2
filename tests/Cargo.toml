@@ -36,10 +36,15 @@ path = "sudo_action_tests.rs"
 name = "blockchain_state_tests"
 path = "blockchain_state_tests.rs"
 
+[[test]]
+name = "sandbox_multi_validator_tests"
+path = "sandbox_multi_validator_tests.rs"
+
 [dependencies]
 platform-core = { path = "../crates/core" }
 platform-storage = { path = "../crates/storage" }
 platform-p2p-consensus = { path = "../crates/p2p-consensus" }
+platform-bittensor = { path = "../crates/bittensor-integration", features = ["test-utils"] }
 
 tokio = { version = "1.40", features = ["full", "test-util"] }
 tempfile = "3.12"
