@@ -32,6 +32,7 @@ pub mod docker;
 pub mod evaluator;
 pub mod health;
 pub mod lifecycle;
+pub mod wasm_backend;
 pub mod wasm_runtime;
 
 pub use backend::{
@@ -47,6 +48,7 @@ pub use docker::{ChallengeDocker, CleanupResult, DockerClient};
 pub use evaluator::*;
 pub use health::*;
 pub use lifecycle::*;
+pub use wasm_backend::{WasmBackendError, WasmChallengeBackend, WasmChallengeInstance};
 pub use wasm_runtime::{WasmError, WasmRuntime, WasmRuntimeConfig};
 use parking_lot::RwLock;
 use platform_core::ChallengeId;
